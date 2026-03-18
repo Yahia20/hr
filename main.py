@@ -3,10 +3,11 @@ import pandas as pd
 from datetime import datetime, timedelta
 import smtplib
 from email.mime.text import MIMEText
+import os # ضفنا المكتبة دي عشان نتأكد من وجود الملف
 
 # --- 1. إعدادات الإيميل ---
 SENDER_EMAIL = "yahiazakaria412@gmail.com"
-SENDER_PASSWORD = "hhvn rral ywer awbb"
+SENDER_PASSWORD = "hhvnrralywerawbb" # شيلنا المسافات من هنا
 
 def send_email(employee_email, employee_name, infraction, penalty, comment):
     subject = f"إشعار إداري: {penalty}"
@@ -26,7 +27,6 @@ def send_email(employee_email, employee_name, infraction, penalty, comment):
     msg['To'] = employee_email
 
     try:
-        # إعدادات سيرفر الإيميل (مثال لـ Gmail)
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
@@ -42,7 +42,7 @@ try:
 except FileNotFoundError:
     log_df = pd.DataFrame(columns=["Employee", "Email", "Infraction", "Penalty", "Comment", "Date"])
 
-# بيانات الموظفين (يمكن ربطها بقاعدة بيانات)
+# بيانات الموظفين
 employees = {"yousef": "youssefeldakar5@gmail.com", "Sara": "sara@example.com"}
 infractions_list = ["تأخير في الرد", "عدم عمل فولو اب", "الوصول متأخراً لمقر العمل"]
 
@@ -60,9 +60,7 @@ with st.form("penalty_form"):
         
         # --- 3. تطبيق منطق الـ 30 يوم ---
         if not log_df.empty:
-            # تحويل عمود التاريخ إلى صيغة datetime للمقارنة
             log_df['Date'] = pd.to_datetime(log_df['Date'])
-            # جلب مخالفات الموظف في آخر 30 يوم فقط
             recent_penalties = log_df[(log_df['Employee'] == emp_name) & (log_df['Date'] >= thirty_days_ago)]
             penalty_count = len(recent_penalties)
         else:
@@ -93,3 +91,18 @@ with st.form("penalty_form"):
         send_email(emp_email, emp_name, infraction, final_penalty, comment)
         
         st.success(f"تم تسجيل الإجراء بنجاح كـ {final_penalty} وإرسال الإيميل للموظف وتحديث ملف الإكسيل.")
+
+# --- 6. عرض وتحميل السجل ---
+st.write("---")
+st.subheader("سجل العقوبات الحالي 📂")
+st.dataframe(log_df)
+
+# التأكد من وجود الملف قبل محاولة تحميله
+if os.path.exists("penalties_log.xlsx"):
+    with open("penalties_log.xlsx", "rb") as file:
+        st.download_button(
+            label="📥 تحميل ملف الإكسيل",
+            data=file,
+            file_name="penalties_log.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
