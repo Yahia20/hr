@@ -7,8 +7,8 @@ import os
 import json
 
 # --- 1. إعدادات الإيميل ---
-SENDER_EMAIL = "yahiazakaria412@gmail.com"
-SENDER_PASSWORD = "hhvnrralywerawbb"
+SENDER_EMAIL = st.secrets["EMAIL"]
+SENDER_PASSWORD = st.secrets["PASSWORD"]
 
 def send_email(employee_email, employee_name, infraction, penalty, comment):
     subject = f"إشعار إداري: {penalty.split('(')[0]}"
