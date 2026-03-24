@@ -64,13 +64,12 @@ else:
     employees = {"yousef": "youssefeldakar5@gmail.com"}
     with open(EMP_FILE, "w", encoding="utf-8") as f: json.dump(employees, f)
 
-# --- دالة حساب مستوى الخطأ بناءً على عمود Within (Days) ---
+# --- دالة حساب مستوى الخطأ ---
 def calculate_infraction_level(emp_name, incident_name, reset_days):
     if log_df.empty:
         return 0
     
     history = log_df[(log_df['Employee'] == emp_name) & (log_df['Incident'] == incident_name)].copy()
-    
     if history.empty:
         return 0
         
@@ -101,70 +100,79 @@ with tab1:
         st.success(st.session_state.success_message)
         del st.session_state.success_message
 
-    with st.form("penalty_form"):
-        if not employees:
-            st.warning("برجاء إضافة موظفين أولاً.")
-            emp_name = None
-        else:
-            emp_name = st.selectbox("اختر الموظف", list(employees.keys()))
-            
-        selected_category = st.selectbox("القسم (Category)", categories)
+    # تم إزالة st.form لكي تتحدث القوائم تلقائياً
+    if not employees:
+        st.warning("برجاء إضافة موظفين أولاً من لوحة التحكم.")
+        emp_name = None
+    else:
+        emp_name = st.selectbox("اختر الموظف", list(employees.keys()))
         
-        incidents_in_cat = matrix_df[matrix_df['Category'] == selected_category]['Incident'].tolist()
-        incident = st.selectbox("نوع الخطأ (Incident)", incidents_in_cat)
-        
-        incident_row = matrix_df[(matrix_df['Category'] == selected_category) & (matrix_df['Incident'] == incident)]
-        details = incident_row['Details'].values[0]
-        reset_days = int(incident_row['Within (Days)'].values[0])
-        
-        st.info(f"**Details:** {details}\n\n**Reset Period:** {reset_days} Days")
-        
-        comment = st.text_area("تعليق / ملاحظات")
-        submitted = st.form_submit_button("إرسال الإشعار (Submit)")
+    selected_category = st.selectbox("القسم (Category)", categories)
+    
+    # تحديث الخطأ بناءً على القسم المختار فوراً
+    incidents_in_cat = matrix_df[matrix_df['Category'] == selected_category]['Incident'].tolist()
+    incident = st.selectbox("نوع الخطأ (Incident)", incidents_in_cat)
+    
+    incident_row = matrix_df[(matrix_df['Category'] == selected_category) & (matrix_df['Incident'] == incident)]
+    details = incident_row['Details'].values[0]
+    
+    # حماية من خطأ تحويل الإكسيل للأرقام إلى تواريخ
+    raw_days = incident_row['Within (Days)'].values[0]
+    try:
+        reset_days = int(float(raw_days))
+        if reset_days > 365: # لو الرقم بالملايين بسبب الإكسيل
+            st.warning("⚠️ تنبيه: عمود الأيام في الإكسيل محفوظ بصيغة 'تاريخ'. تم اعتباره 30 يوم مؤقتاً، يرجى تعديله في ملف الإكسيل.")
+            reset_days = 30
+    except:
+        reset_days = 30
+    
+    st.info(f"**Details:** {details}\n\n**Reset Period:** {reset_days} Days")
+    
+    comment = st.text_area("تعليق / ملاحظات")
+    submitted = st.button("إرسال الإشعار (Submit)") # تحول لزرار عادي
 
-        if submitted and emp_name:
-            current_level = calculate_infraction_level(emp_name, incident, reset_days)
-            next_action_index = current_level + 1 
+    if submitted and emp_name:
+        current_level = calculate_infraction_level(emp_name, incident, reset_days)
+        next_action_index = current_level + 1 
+        
+        action_columns = ["1st time", "2nd time", "3rd time", "4th time", "5th time", "6th time", "7th time", "8th time"]
+        
+        if next_action_index > len(action_columns):
+            st.error("❌ لا يمكن تسجيل هذه المخالفة! الموظف استنفذ جميع الإجراءات التأديبية لهذا الخطأ.")
+        else:
+            action_col_name = action_columns[next_action_index - 1]
             
-            action_columns = ["1st time", "2nd time", "3rd time", "4th time", "5th time", "6th time", "7th time", "8th time"]
-            
-            if next_action_index > len(action_columns):
-                st.error("❌ لا يمكن تسجيل هذه المخالفة! الموظف استنفذ جميع الإجراءات التأديبية لهذا الخطأ.")
+            temp_penalty = incident_row[action_col_name]
+            if isinstance(temp_penalty, pd.DataFrame): 
+                final_penalty = temp_penalty.iloc[0, 0]
+            elif isinstance(temp_penalty, pd.Series): 
+                final_penalty = temp_penalty.iloc[0]
             else:
-                action_col_name = action_columns[next_action_index - 1]
+                final_penalty = temp_penalty
+            
+            if pd.isna(final_penalty) or str(final_penalty).strip() == "":
+                st.error("❌ لا يمكن إعطاء عقوبة إضافية. الموظف استنفذ الحد الأقصى للإجراءات في هذه المخالفة المحددة.")
+            else:
+                emp_email = employees[emp_name]
+                current_date = datetime.now()
                 
-                # استخراج العقوبة بشكل آمن
-                temp_penalty = incident_row[action_col_name]
-                if isinstance(temp_penalty, pd.DataFrame): 
-                    final_penalty = temp_penalty.iloc[0, 0]
-                elif isinstance(temp_penalty, pd.Series): 
-                    final_penalty = temp_penalty.iloc[0]
-                else:
-                    final_penalty = temp_penalty
+                new_record = pd.DataFrame({
+                    "Employee": [emp_name],
+                    "Email": [emp_email],
+                    "Category": [selected_category],
+                    "Incident": [incident],
+                    "Penalty": [final_penalty],
+                    "Comment": [comment],
+                    "Date": [current_date.strftime("%Y-%m-%d")]
+                })
                 
-                if pd.isna(final_penalty) or str(final_penalty).strip() == "":
-                    st.error("❌ لا يمكن إعطاء عقوبة إضافية. الموظف استنفذ الحد الأقصى للإجراءات في هذه المخالفة المحددة.")
-                else:
-                    emp_email = employees[emp_name]
-                    current_date = datetime.now()
-                    
-                    new_record = pd.DataFrame({
-                        "Employee": [emp_name],
-                        "Email": [emp_email],
-                        "Category": [selected_category],
-                        "Incident": [incident],
-                        "Penalty": [final_penalty],
-                        "Comment": [comment],
-                        "Date": [current_date.strftime("%Y-%m-%d")]
-                    })
-                    
-                    log_df = pd.concat([log_df, new_record], ignore_index=True)
-                    log_df.to_excel(EXCEL_FILE, index=False)
-                    
-                    send_email(emp_email, emp_name, incident, final_penalty, comment)
-                    
-                    st.session_state.success_message = f"✅ تم تسجيل المخالفة ({action_col_name}): {final_penalty}"
-                    st.rerun()
+                log_df = pd.concat([log_df, new_record], ignore_index=True)
+                log_df.to_excel(EXCEL_FILE, index=False)
+                
+                send_email(emp_email, emp_name, incident, final_penalty, comment)
+                
+                st.session_state.success_message = f"✅ تم تسجيل المخالفة ({action_col_name}): {final_penalty}"
+                st.rerun()
 
 # ==========================================
 # الصفحة الثانية: لوحة التحكم 
