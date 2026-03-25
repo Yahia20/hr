@@ -9,16 +9,16 @@ import os
 import plotly.express as px
 
 # ==========================================
-# 1. إعدادات النظام وقاموس العقوبات (Priority 1)
+# 1. إعدادات النظام وقاموس العقوبات (مطابق للإكسيل)
 # ==========================================
 st.set_page_config(page_title="HR Disciplinary System", page_icon="⚖️", layout="wide")
 
 PENALTY_MAP = {
-    "Yellow": {"label": "إشعار أداء (Performance Notice)", "deduction_hours": 0, "deduction_days": 0, "freeze_months": 0},
-    "Orange": {"label": "لفت نظر (Performance Flag)", "deduction_hours": 4.5, "deduction_days": 0, "freeze_months": 0},
-    "Red": {"label": "إنذار أداء (Performance Alert)", "deduction_hours": 0, "deduction_days": 2, "freeze_months": 0},
-    "Black": {"label": "تحذير نهائي (Performance Warning)", "deduction_hours": 0, "deduction_days": 4, "freeze_months": 3},
-    "Investigation": {"label": "إيقاف للتحقيق (Suspended / Investigation)", "deduction_hours": 0, "deduction_days": 0, "freeze_months": 0},
+    "Yellow": {"label": "Performance Notice", "deduction_hours": 0, "deduction_days": 0, "freeze_months": 0},
+    "Orange": {"label": "Performance Flag + 4.5 hrs. 'Half Day' Deduction", "deduction_hours": 4.5, "deduction_days": 0, "freeze_months": 0},
+    "Red": {"label": "Performance Alert + 2 Days Deduction", "deduction_hours": 0, "deduction_days": 2, "freeze_months": 0},
+    "Black": {"label": "Performance Warning + 4 Days Deduction + 3 Months Freeze", "deduction_hours": 0, "deduction_days": 4, "freeze_months": 3},
+    "Investigation": {"label": "Employee is suspended and transferred to Investigation on Spot", "deduction_hours": 0, "deduction_days": 0, "freeze_months": 0},
 }
 
 SENDER_EMAIL = st.secrets.get("EMAIL", "")
@@ -27,17 +27,59 @@ HR_MANAGER_EMAIL = st.secrets.get("HR_MANAGER_EMAIL", SENDER_EMAIL)
 HR_ADMIN_PASSWORD = st.secrets.get("HR_ADMIN_PASSWORD", "1234")
 
 # ==========================================
-# 2. إعداد قاعدة البيانات (System Architecture)
+# 2. مصفوفة الأخطاء الكاملة (The Exact Excel Matrix)
+# ==========================================
+MATRIX_DATA = {
+    "Attendance & adherance": {
+        "Late Arrival": {"reset": 30, "escalation": ["Yellow", "Yellow", "Orange", "Red", "Black", "Investigation"]},
+        "No-show": {"reset": 90, "escalation": ["Red", "Red", "Black", "Investigation"]},
+        "Exceed breaks": {"reset": 30, "escalation": ["Yellow", "Yellow", "Yellow", "Yellow", "Orange", "Red", "Black", "Investigation"]},
+        "Un-scheduled breaks": {"reset": 30, "escalation": ["Yellow", "Red", "Black", "Investigation"]},
+        "Out of working hours attendance": {"reset": 90, "escalation": ["Yellow", "Red", "Black", "Investigation"]},
+        "Attendance manipulation": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Early leave": {"reset": 180, "escalation": ["Black", "Investigation"]},
+    },
+    "Personal Attitude": {
+        "Use of abusive words": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Physical harm": {"reset": 180, "escalation": ["Investigation"]},
+        "Sleeping on the floor": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Unprofessional behavior": {"reset": 180, "escalation": ["Black", "Investigation"]},
+    },
+    "Abusing": {
+        "Company assets": {"reset": 180, "escalation": ["Investigation"]},
+        "Routing calls / tickets": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Releasing calls / tickets": {"reset": 180, "escalation": ["Investigation"]},
+        "Using other colleague's logins": {"reset": 180, "escalation": ["Investigation"]},
+        "Aux system reports & tools": {"reset": 30, "escalation": ["Yellow", "Yellow", "Orange", "Red", "Black", "Investigation"]},
+    },
+    "Policy": {
+        "Medical examination": {"reset": 180, "escalation": ["Investigation"]},
+        "Visitors": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Smoking": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Influence of Alcohol / drugs": {"reset": 180, "escalation": ["Investigation"]},
+        "Harassment": {"reset": 180, "escalation": ["Investigation"]},
+        "Stealing": {"reset": 180, "escalation": ["Investigation"]},
+        "Social media": {"reset": 180, "escalation": ["Investigation"]},
+        "Data confidentiality, ethical conduct, and damage control": {"reset": 180, "escalation": ["Investigation"]},
+        "Mobile phones": {"reset": 30, "escalation": ["Red", "Black", "Investigation"]},
+        "Food & beverage": {"reset": 30, "escalation": ["Orange", "Red", "Black", "Investigation"]},
+        "Business process failure": {"reset": 30, "escalation": ["Orange", "Red", "Black", "Investigation"]},
+        "End-user critical failure": {"reset": 60, "escalation": ["Black", "Investigation"]},
+        "Cyber security": {"reset": 30, "escalation": ["Red", "Black", "Investigation"]},
+        "Unprofessional behaviorss": {"reset": 30, "escalation": ["Orange", "Black", "Investigation"]},
+    }
+}
+
+# ==========================================
+# 3. إعداد قاعدة البيانات
 # ==========================================
 DB_FILE = "hr_system.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    # جدول الموظفين (بإضافة المدير والقسم)
     c.execute('''CREATE TABLE IF NOT EXISTS employees 
                  (id INTEGER PRIMARY KEY, name TEXT UNIQUE, email TEXT, department TEXT, manager_email TEXT)''')
-    # جدول المخالفات الشامل
     c.execute('''CREATE TABLE IF NOT EXISTS violations 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_name TEXT, category TEXT, 
                  incident TEXT, penalty_color TEXT, penalty_label TEXT, deduction_hours REAL, 
@@ -52,66 +94,81 @@ def get_db_connection():
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
 # ==========================================
-# 3. دوال مساعدة (Email & Logic)
+# 4. دوال إرسال الإيميلات (مفصولة: للموظف وللمدير)
 # ==========================================
 def send_email(emp_email, manager_email, emp_name, category, incident, penalty_color, comment):
     if not SENDER_EMAIL or not SENDER_PASSWORD:
-        st.error("⚠️ إعدادات الإيميل (Secrets) غير متوفرة.")
+        st.error("⚠️ Email settings missing.")
         return False
         
     p_info = PENALTY_MAP.get(penalty_color, PENALTY_MAP["Yellow"])
     
-    msg = MIMEMultipart()
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = emp_email
-    
-    # Priority 4: Investigation Workflow & Manager CC
-    receivers = [emp_email]
-    if manager_email:
-        msg['Cc'] = manager_email
-        receivers.append(manager_email)
-        
-    if penalty_color == "Investigation":
-        msg['Subject'] = f"عاجل: إيقاف عن العمل للتحقيق - {emp_name}"
-        msg['Cc'] = f"{manager_email},{HR_MANAGER_EMAIL}" if manager_email else HR_MANAGER_EMAIL
-        receivers.append(HR_MANAGER_EMAIL)
-        body = f"""مرحباً {emp_name}،\n\nيرجى العلم بأنه تم إيقافك مؤقتاً عن العمل وتحويلك للتحقيق بناءً على الملاحظة التالية:\nالنوع: {category}\nالخطأ: {incident}\nملاحظات الإدارة: {comment}\n\nسيتم التواصل معك من قبل الموارد البشرية قريباً."""
-    else:
-        msg['Subject'] = f"إشعار إداري: {p_info['label']}"
-        body = f"""مرحباً {emp_name}،\n\nتم تسجيل الإجراء الإداري التالي في سجلك:\n- الخطأ: {incident} ({category})\n- القرار: {p_info['label']}\n- الخصم: {p_info['deduction_days']} أيام و {p_info['deduction_hours']} ساعات\n- تجميد الترقية: {p_info['freeze_months']} شهور\n- ملاحظات: {comment}\n\nبرجاء الالتزام بتعليمات العمل."""
-
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.sendmail(SENDER_EMAIL, receivers, msg.as_string())
+
+            # --- الإيميل الموجه للموظف ---
+            msg_emp = MIMEMultipart()
+            msg_emp['From'] = SENDER_EMAIL
+            msg_emp['To'] = emp_email
+            if penalty_color == "Investigation":
+                msg_emp['Subject'] = f"URGENT: Suspension Notice - {emp_name}"
+                body_emp = f"Dear {emp_name},\n\nYou are hereby suspended from work pending an investigation regarding:\nCategory: {category}\nIncident: {incident}\nHR Notes: {comment}\n\nHR will contact you shortly."
+            else:
+                msg_emp['Subject'] = f"Disciplinary Action: {penalty_color} Card"
+                body_emp = f"Dear {emp_name},\n\nA disciplinary action has been recorded on your file:\n\n- Incident: {incident} ({category})\n- Penalty: {p_info['label']}\n- HR Notes: {comment}\n\nPlease adhere to company policies to avoid further escalation."
+            
+            msg_emp.attach(MIMEText(body_emp, 'plain', 'utf-8'))
+            server.sendmail(SENDER_EMAIL, [emp_email], msg_emp.as_string())
+
+            # --- الإيميل الموجه للمدير المباشر ---
+            if manager_email:
+                msg_mgr = MIMEMultipart()
+                msg_mgr['From'] = SENDER_EMAIL
+                msg_mgr['To'] = manager_email
+                msg_mgr['Subject'] = f"Manager Notification: Penalty issued for {emp_name}"
+                
+                body_mgr = f"Dear Manager,\n\nThis is to notify you that your team member, {emp_name}, has received a disciplinary penalty.\n\nDetails:\n- Incident: {incident} ({category})\n- Penalty Given: {p_info['label']}\n- HR Alignment/Notes: {comment}\n\nPlease review and guide the employee accordingly."
+                
+                if penalty_color == "Investigation":
+                    msg_mgr['Cc'] = HR_MANAGER_EMAIL
+                    body_mgr += f"\n\n🚨 NOTE: The employee has been SUSPENDED pending investigation."
+                    receivers_mgr = [manager_email, HR_MANAGER_EMAIL]
+                else:
+                    receivers_mgr = [manager_email]
+
+                msg_mgr.attach(MIMEText(body_mgr, 'plain', 'utf-8'))
+                server.sendmail(SENDER_EMAIL, receivers_mgr, msg_mgr.as_string())
+
         return True
     except Exception as e:
-        st.error(f"حدث خطأ أثناء إرسال الإيميل: {e}")
+        st.error(f"Error sending email: {e}")
         return False
 
 # ==========================================
-# 4. محاكاة مصفوفة العقوبات وتصحيح التواريخ (Priority 3)
+# 5. نظام الحماية
 # ==========================================
-CATEGORIES = ["الحضور والانصراف", "السلوك الشخصي", "إساءة الاستخدام", "سياسات العمل"]
-INCIDENTS = ["تأخير في الرد", "عدم عمل فولو اب", "الوصول متأخراً لمقر العمل", "الغياب بدون إذن"]
-
-def validate_reset_days(raw_days):
-    try:
-        days = int(float(str(raw_days).split('.')[0]))
-        if 1 <= days <= 730:
-            return days
-    except:
-        pass
-    return 30 # Default Fallback
+def check_password(tab_id):
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    
+    if not st.session_state.authenticated:
+        pwd = st.text_input("🔑 Enter HR Password:", type="password", key=f"pwd_input_{tab_id}")
+        if st.button("Login", key=f"login_btn_{tab_id}"):
+            if pwd == HR_ADMIN_PASSWORD:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect Password.")
+        return False
+    return True
 
 # ==========================================
-# 5. واجهة المستخدم (UI & Tabs)
+# 6. واجهة المستخدم (UI & Tabs)
 # ==========================================
-st.title("نظام إدارة إنذارات الموظفين 🟨⬛")
+st.title("HR Disciplinary System 🟨⬛")
 
-tab1, tab2, tab3 = st.tabs(["📝 تسجيل مخالفة", "⚙️ لوحة الإدارة (مؤمنة)", "📊 التقارير (مؤمنة)"])
+tab1, tab2, tab3 = st.tabs(["📝 Log Violation", "⚙️ Admin Dashboard", "📊 Reports & Payroll"])
 
 # ---------------- Tab 1: تسجيل المخالفة ----------------
 with tab1:
@@ -119,169 +176,148 @@ with tab1:
     employees_df = pd.read_sql_query("SELECT * FROM employees", conn)
     
     if employees_df.empty:
-        st.warning("برجاء إعداد بيانات الموظفين من لوحة الإدارة أولاً.")
+        st.warning("Please add employees from the Admin Dashboard first.")
     else:
         with st.form("penalty_form"):
-            st.subheader("إدخال تفاصيل المخالفة")
+            st.subheader("Violation Details")
             
-            # Audit Trail Requirement
-            submitted_by = st.text_input("اسم المدخل (HR Rep Name):", required=True)
+            submitted_by = st.text_input("HR Rep Name (Audit):")
+            emp_name = st.selectbox("Select Employee", employees_df['name'].tolist())
             
             col1, col2 = st.columns(2)
             with col1:
-                emp_name = st.selectbox("اختر الموظف", employees_df['name'].tolist())
-                category = st.selectbox("تصنيف المخالفة", CATEGORIES)
+                # القوائم الديناميكية المربوطة ببعضها
+                category = st.selectbox("Category", list(MATRIX_DATA.keys()))
             with col2:
-                incident = st.selectbox("نوع الخطأ", INCIDENTS)
-                reset_days_input = st.number_input("فترة السماح (Reset Days)", min_value=1, max_value=730, value=30)
+                incident = st.selectbox("Incident", list(MATRIX_DATA[category].keys()))
             
-            is_investigation = st.checkbox("🔴 تحويل مباشر للتحقيق (Investigation Workflow)")
-            comment = st.text_area("تعليق / ملاحظات (Alignment details)")
+            # عرض فترة السماح أوتوماتيكياً للـ HR
+            reset_days = MATRIX_DATA[category][incident]["reset"]
+            st.info(f"ℹ️ Reset Period for this incident is: **{reset_days} Days**")
             
-            submitted = st.form_submit_button("إرسال الإشعار وتسجيل العقوبة")
+            comment = st.text_area("HR Comments / Alignment details")
+            submitted = st.form_submit_button("Submit & Notify")
 
-            if submitted and submitted_by:
-                emp_data = employees_df[employees_df['name'] == emp_name].iloc[0]
-                emp_email = emp_data['email']
-                manager_email = emp_data['manager_email']
-                current_date = datetime.now()
-                
-                reset_days = validate_reset_days(reset_days_input)
-                cutoff_date = current_date - timedelta(days=reset_days)
-                
-                if is_investigation:
-                    final_color = "Investigation"
+            if submitted:
+                if not submitted_by:
+                    st.error("⚠️ HR Rep Name is required.")
                 else:
-                    # حساب عدد المخالفات السابقة لنفس الخطأ في فترة السماح
+                    emp_data = employees_df[employees_df['name'] == emp_name].iloc[0]
+                    emp_email = emp_data['email']
+                    manager_email = emp_data['manager_email']
+                    current_date = datetime.now()
+                    cutoff_date = current_date - timedelta(days=reset_days)
+                    
+                    # حساب عدد المخالفات لنفس الخطأ خلال فترة السماح
                     c = conn.cursor()
                     c.execute('''SELECT COUNT(*) FROM violations 
                                  WHERE employee_name=? AND incident=? AND created_at >= ? AND penalty_color != 'Investigation' ''', 
                               (emp_name, incident, cutoff_date.strftime("%Y-%m-%d %H:%M:%S")))
                     penalty_count = c.fetchone()[0]
                     
-                    # سلم التصعيد حتى 8 مستويات
-                    escalation_colors = ["Yellow", "Orange", "Red", "Black", "Black", "Black", "Black", "Black"]
-                    if penalty_count >= 8:
-                        st.error("⚠️ الموظف تجاوز الحد الأقصى للمخالفات (8 مرات). برجاء اتخاذ إجراء إداري علوي.")
-                        st.stop()
+                    escalation_list = MATRIX_DATA[category][incident]["escalation"]
+                    
+                    # تحديد لون العقوبة بناءً على سلم التصعيد الخاص بالخطأ
+                    if penalty_count >= len(escalation_list):
+                        final_color = escalation_list[-1] # الوصول للحد الأقصى (غالباً تحقيق)
                     else:
-                        final_color = escalation_colors[penalty_count]
+                        final_color = escalation_list[penalty_count]
 
-                # حفظ في قاعدة البيانات
-                p_info = PENALTY_MAP[final_color]
-                c = conn.cursor()
-                c.execute('''INSERT INTO violations 
-                             (employee_name, category, incident, penalty_color, penalty_label, 
-                             deduction_hours, deduction_days, freeze_months, comment, submitted_by, created_at) 
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                          (emp_name, category, incident, final_color, p_info['label'], 
-                           p_info['deduction_hours'], p_info['deduction_days'], p_info['freeze_months'], 
-                           comment, submitted_by, current_date.strftime("%Y-%m-%d %H:%M:%S")))
-                conn.commit()
-                
-                # إرسال الإيميل
-                email_sent = send_email(emp_email, manager_email, emp_name, category, incident, final_color, comment)
-                
-                if email_sent:
-                    st.success(f"✅ تم تسجيل العقوبة ({p_info['label']}) بنجاح وإرسال الإشعارات.")
-                else:
-                    st.warning(f"تم تسجيل العقوبة ({p_info['label']}) في السجل، لكن فشل إرسال الإيميل.")
+                    p_info = PENALTY_MAP[final_color]
+                    c = conn.cursor()
+                    c.execute('''INSERT INTO violations 
+                                 (employee_name, category, incident, penalty_color, penalty_label, 
+                                 deduction_hours, deduction_days, freeze_months, comment, submitted_by, created_at) 
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                              (emp_name, category, incident, final_color, p_info['label'], 
+                               p_info['deduction_hours'], p_info['deduction_days'], p_info['freeze_months'], 
+                               comment, submitted_by, current_date.strftime("%Y-%m-%d %H:%M:%S")))
+                    conn.commit()
+                    
+                    email_sent = send_email(emp_email, manager_email, emp_name, category, incident, final_color, comment)
+                    
+                    if email_sent:
+                        st.success(f"✅ Action Logged: {final_color} ({p_info['label']}). Emails sent to Employee & Manager.")
+                    else:
+                        st.warning(f"Action Logged: {final_color}, but email failed.")
     conn.close()
-
-# ---------------- نظام الحماية للتبويبات (Priority 2) ----------------
-def check_password():
-    if "authenticated" not in st.session_state:
-        st.session_state.authenticated = False
-    
-    if not st.session_state.authenticated:
-        pwd = st.text_input("🔑 أدخل كلمة مرور الـ HR للوصول لهذه الصفحة:", type="password", key="pwd_input")
-        if st.button("تسجيل الدخول"):
-            if pwd == HR_ADMIN_PASSWORD:
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("كلمة المرور غير صحيحة.")
-        return False
-    return True
 
 # ---------------- Tab 2: لوحة الإدارة ----------------
 with tab2:
-    if check_password():
+    if check_password("tab2"):
         conn = get_db_connection()
-        st.subheader("👥 إدارة الموظفين")
+        st.subheader("👥 Manage Employees")
         
         with st.form("add_emp_form"):
-            e_name = st.text_input("اسم الموظف")
-            e_email = st.text_input("إيميل الموظف")
-            e_dept = st.text_input("القسم (Department)")
-            e_manager = st.text_input("إيميل المدير المباشر (لإرسال الـ CC)")
-            if st.form_submit_button("إضافة / تحديث الموظف"):
+            e_name = st.text_input("Employee Name")
+            e_email = st.text_input("Employee Email")
+            e_dept = st.text_input("Department")
+            e_manager = st.text_input("Manager Email (For CC)")
+            if st.form_submit_button("Add / Update Employee"):
                 c = conn.cursor()
                 c.execute("INSERT OR REPLACE INTO employees (name, email, department, manager_email) VALUES (?, ?, ?, ?)", 
                           (e_name, e_email, e_dept, e_manager))
                 conn.commit()
-                st.success("تم تحديث بيانات الموظف.")
+                st.success("Employee Saved.")
                 st.rerun()
                 
         st.write("---")
-        st.subheader("❌ مسح العقوبات")
+        st.subheader("❌ Delete Penalty Record")
         v_df = pd.read_sql_query("SELECT id, employee_name, incident, penalty_label, created_at FROM violations", conn)
         if not v_df.empty:
             st.dataframe(v_df, use_container_width=True)
-            v_id = st.selectbox("اختر رقم الـ ID للعقوبة المراد مسحها:", v_df['id'])
-            if st.button("حذف العقوبة نهائياً"):
+            v_id = st.selectbox("Select Record ID to Delete:", v_df['id'])
+            if st.button("Delete Permanently"):
                 conn.cursor().execute("DELETE FROM violations WHERE id=?", (v_id,))
                 conn.commit()
-                st.success("تم الحذف.")
+                st.success("Deleted successfully.")
                 st.rerun()
         conn.close()
         
-        if st.button("تسجيل الخروج"):
+        if st.button("Logout", key="logout_tab2"):
             st.session_state.authenticated = False
             st.rerun()
 
-# ---------------- Tab 3: التقارير والإحصائيات (Priority 5) ----------------
+# ---------------- Tab 3: التقارير والإحصائيات ----------------
 with tab3:
-    if check_password():
+    if check_password("tab3"):
         conn = get_db_connection()
-        st.header("📊 لوحة تحكم التقارير")
+        st.header("📊 HR & Payroll Reports")
         
         violations_df = pd.read_sql_query("SELECT * FROM violations", conn)
         
         if violations_df.empty:
-            st.info("لا توجد بيانات كافية لعرض التقارير.")
+            st.info("No data available.")
         else:
             col_chart1, col_chart2 = st.columns(2)
-            
             with col_chart1:
-                st.subheader("المخالفات حسب التصنيف")
-                fig1 = px.pie(violations_df, names='category', title='توزيع أنواع المخالفات')
+                fig1 = px.pie(violations_df, names='category', title='Violations by Category')
                 st.plotly_chart(fig1, use_container_width=True)
-                
             with col_chart2:
-                st.subheader("أكثر الموظفين مخالفة")
                 emp_counts = violations_df['employee_name'].value_counts().reset_index()
                 emp_counts.columns = ['employee_name', 'count']
-                fig2 = px.bar(emp_counts, x='employee_name', y='count', title='عدد المخالفات لكل موظف')
+                fig2 = px.bar(emp_counts, x='employee_name', y='count', title='Top Violators')
                 st.plotly_chart(fig2, use_container_width=True)
             
             st.write("---")
-            st.subheader("⚠️ سجل الخصومات وتجميد الترقيات (للتصدير لشؤون العاملين)")
+            st.subheader("⚠️ Payroll Deductions & Promotion Freezes")
             
-            # حساب التجميد النشط (Freeze Active)
             violations_df['created_at'] = pd.to_datetime(violations_df['created_at'])
             violations_df['freeze_end_date'] = violations_df.apply(
                 lambda row: (row['created_at'] + pd.DateOffset(months=int(row['freeze_months']))) if row['freeze_months'] > 0 else None, axis=1
             )
             violations_df['is_frozen'] = violations_df['freeze_end_date'].apply(
-                lambda d: "نعم (مجمد)" if pd.notnull(d) and d > datetime.now() else "لا"
+                lambda d: "Yes" if pd.notnull(d) and d > datetime.now() else "No"
             )
             
             export_df = violations_df[['employee_name', 'incident', 'penalty_label', 'deduction_days', 'deduction_hours', 'freeze_end_date', 'is_frozen', 'created_at']]
             st.dataframe(export_df, use_container_width=True)
             
-            # زرار التحميل كـ Excel
             csv = export_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="📥 تصدير التقرير المالي كـ CSV", data=csv, file_name="payroll_deductions_report.csv", mime="text/csv")
+            st.download_button(label="📥 Export to CSV", data=csv, file_name="payroll_report.csv", mime="text/csv")
+            
+        if st.button("Logout", key="logout_tab3"):
+            st.session_state.authenticated = False
+            st.rerun()
             
         conn.close()
