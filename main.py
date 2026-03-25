@@ -27,7 +27,51 @@ HR_MANAGER_EMAIL = st.secrets.get("HR_MANAGER_EMAIL", SENDER_EMAIL)
 HR_ADMIN_PASSWORD = st.secrets.get("HR_ADMIN_PASSWORD", "1234")
 
 # ==========================================
-# 2. إعداد قاعدة البيانات 
+# 2. مصفوفة الأخطاء الكاملة (The Exact Excel Matrix) - الجزء اللي كان ناقص عندك
+# ==========================================
+MATRIX_DATA = {
+    "Attendance & adherance": {
+        "Late Arrival": {"reset": 30, "escalation": ["Yellow", "Yellow", "Orange", "Red", "Black", "Investigation"]},
+        "No-show": {"reset": 90, "escalation": ["Red", "Red", "Black", "Investigation"]},
+        "Exceed breaks": {"reset": 30, "escalation": ["Yellow", "Yellow", "Yellow", "Yellow", "Orange", "Red", "Black", "Investigation"]},
+        "Un-scheduled breaks": {"reset": 30, "escalation": ["Yellow", "Red", "Black", "Investigation"]},
+        "Out of working hours attendance": {"reset": 90, "escalation": ["Yellow", "Red", "Black", "Investigation"]},
+        "Attendance manipulation": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Early leave": {"reset": 180, "escalation": ["Black", "Investigation"]},
+    },
+    "Personal Attitude": {
+        "Use of abusive words": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Physical harm": {"reset": 180, "escalation": ["Investigation"]},
+        "Sleeping on the floor": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Unprofessional behavior": {"reset": 180, "escalation": ["Black", "Investigation"]},
+    },
+    "Abusing": {
+        "Company assets": {"reset": 180, "escalation": ["Investigation"]},
+        "Routing calls / tickets": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Releasing calls / tickets": {"reset": 180, "escalation": ["Investigation"]},
+        "Using other colleague's logins": {"reset": 180, "escalation": ["Investigation"]},
+        "Aux system reports & tools": {"reset": 30, "escalation": ["Yellow", "Yellow", "Orange", "Red", "Black", "Investigation"]},
+    },
+    "Policy": {
+        "Medical examination": {"reset": 180, "escalation": ["Investigation"]},
+        "Visitors": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Smoking": {"reset": 180, "escalation": ["Black", "Investigation"]},
+        "Influence of Alcohol / drugs": {"reset": 180, "escalation": ["Investigation"]},
+        "Harassment": {"reset": 180, "escalation": ["Investigation"]},
+        "Stealing": {"reset": 180, "escalation": ["Investigation"]},
+        "Social media": {"reset": 180, "escalation": ["Investigation"]},
+        "Data confidentiality, ethical conduct, and damage control": {"reset": 180, "escalation": ["Investigation"]},
+        "Mobile phones": {"reset": 30, "escalation": ["Red", "Black", "Investigation"]},
+        "Food & beverage": {"reset": 30, "escalation": ["Orange", "Red", "Black", "Investigation"]},
+        "Business process failure": {"reset": 30, "escalation": ["Orange", "Red", "Black", "Investigation"]},
+        "End-user critical failure": {"reset": 60, "escalation": ["Black", "Investigation"]},
+        "Cyber security": {"reset": 30, "escalation": ["Red", "Black", "Investigation"]},
+        "Unprofessional behaviorss": {"reset": 30, "escalation": ["Orange", "Black", "Investigation"]},
+    }
+}
+
+# ==========================================
+# 3. إعداد قاعدة البيانات 
 # ==========================================
 DB_FILE = "hr_system.db"
 
@@ -50,7 +94,7 @@ def get_db_connection():
     return sqlite3.connect(DB_FILE, check_same_thread=False)
 
 # ==========================================
-# 3. دوال مساعدة (Email)
+# 4. دوال مساعدة (Email)
 # ==========================================
 def send_email(emp_email, manager_email, emp_name, category, incident, penalty_color, comment):
     if not SENDER_EMAIL or not SENDER_PASSWORD:
@@ -59,26 +103,6 @@ def send_email(emp_email, manager_email, emp_name, category, incident, penalty_c
         
     p_info = PENALTY_MAP.get(penalty_color, PENALTY_MAP["Yellow"])
     
-    msg = MIMEMultipart()
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = emp_email
-    
-    receivers = [emp_email]
-    if manager_email:
-        msg['Cc'] = manager_email
-        receivers.append(manager_email)
-        
-    if penalty_color == "Investigation":
-        msg['Subject'] = f"عاجل: إيقاف عن العمل للتحقيق - {emp_name}"
-        msg['Cc'] = f"{manager_email},{HR_MANAGER_EMAIL}" if manager_email else HR_MANAGER_EMAIL
-        receivers.append(HR_MANAGER_EMAIL)
-        body = f"""مرحباً {emp_name}،\n\nيرجى العلم بأنه تم إيقافك مؤقتاً عن العمل وتحويلك للتحقيق بناءً على الملاحظة التالية:\nالنوع: {category}\nالخطأ: {incident}\nملاحظات الإدارة: {comment}\n\nسيتم التواصل معك من قبل الموارد البشرية قريباً."""
-    else:
-        msg['Subject'] = f"إشعار إداري: {p_info['label']}"
-        body = f"""مرحباً {emp_name}،\n\nتم تسجيل الإجراء الإداري التالي في سجلك:\n- الخطأ: {incident} ({category})\n- القرار: {p_info['label']}\n- الخصم: {p_info['deduction_days']} أيام و {p_info['deduction_hours']} ساعات\n- تجميد الترقية: {p_info['freeze_months']} شهور\n- ملاحظات: {comment}\n\nبرجاء الالتزام بتعليمات العمل."""
-
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
@@ -122,21 +146,6 @@ def send_email(emp_email, manager_email, emp_name, category, incident, penalty_c
         return False
 
 # ==========================================
-# 4. محاكاة مصفوفة العقوبات 
-# ==========================================
-CATEGORIES = ["الحضور والانصراف", "السلوك الشخصي", "إساءة الاستخدام", "سياسات العمل"]
-INCIDENTS = ["تأخير في الرد", "عدم عمل فولو اب", "الوصول متأخراً لمقر العمل", "الغياب بدون إذن"]
-
-def validate_reset_days(raw_days):
-    try:
-        days = int(float(str(raw_days).split('.')[0]))
-        if 1 <= days <= 730:
-            return days
-    except:
-        pass
-    return 30 
-
-# ==========================================
 # 5. نظام الحماية للتبويبات
 # ==========================================
 def check_password(tab_id):
@@ -172,17 +181,15 @@ with tab1:
         with st.form("penalty_form"):
             st.subheader("Violation Details")
             
-            # تم إزالة required=True من هنا
             submitted_by = st.text_input("اسم المدخل (HR Rep Name):")
+            emp_name = st.selectbox("Select Employee", employees_df['name'].tolist())
             
             col1, col2 = st.columns(2)
             with col1:
-                # القوائم الديناميكية المربوطة ببعضها
                 category = st.selectbox("Category", list(MATRIX_DATA.keys()))
             with col2:
                 incident = st.selectbox("Incident", list(MATRIX_DATA[category].keys()))
             
-            # عرض فترة السماح أوتوماتيكياً للـ HR
             reset_days = MATRIX_DATA[category][incident]["reset"]
             st.info(f"ℹ️ Reset Period for this incident is: **{reset_days} Days**")
             
@@ -198,24 +205,20 @@ with tab1:
                     manager_email = emp_data['manager_email']
                     current_date = datetime.now()
                     
-                    reset_days = validate_reset_days(reset_days_input)
                     cutoff_date = current_date - timedelta(days=reset_days)
                     
-                    if is_investigation:
-                        final_color = "Investigation"
+                    c = conn.cursor()
+                    c.execute('''SELECT COUNT(*) FROM violations 
+                                 WHERE employee_name=? AND incident=? AND created_at >= ? AND penalty_color != 'Investigation' ''', 
+                              (emp_name, incident, cutoff_date.strftime("%Y-%m-%d %H:%M:%S")))
+                    penalty_count = c.fetchone()[0]
+                    
+                    escalation_list = MATRIX_DATA[category][incident]["escalation"]
+                    
+                    if penalty_count >= len(escalation_list):
+                        final_color = escalation_list[-1]
                     else:
-                        c = conn.cursor()
-                        c.execute('''SELECT COUNT(*) FROM violations 
-                                     WHERE employee_name=? AND incident=? AND created_at >= ? AND penalty_color != 'Investigation' ''', 
-                                  (emp_name, incident, cutoff_date.strftime("%Y-%m-%d %H:%M:%S")))
-                        penalty_count = c.fetchone()[0]
-                        
-                        escalation_colors = ["Yellow", "Orange", "Red", "Black", "Black", "Black", "Black", "Black"]
-                        if penalty_count >= 8:
-                            st.error("⚠️ الموظف تجاوز الحد الأقصى للمخالفات (8 مرات). برجاء اتخاذ إجراء إداري علوي.")
-                            st.stop()
-                        else:
-                            final_color = escalation_colors[penalty_count]
+                        final_color = escalation_list[penalty_count]
 
                     p_info = PENALTY_MAP[final_color]
                     c = conn.cursor()
@@ -231,9 +234,9 @@ with tab1:
                     email_sent = send_email(emp_email, manager_email, emp_name, category, incident, final_color, comment)
                     
                     if email_sent:
-                        st.success(f"✅ تم تسجيل العقوبة ({p_info['label']}) بنجاح وإرسال الإشعارات.")
+                        st.success(f"✅ Action Logged: {final_color} ({p_info['label']}). Emails sent to Employee & Manager.")
                     else:
-                        st.warning(f"تم تسجيل العقوبة ({p_info['label']}) في السجل، لكن فشل إرسال الإيميل.")
+                        st.warning(f"Action Logged: {final_color}, but email failed.")
     conn.close()
 
 # ---------------- Tab 2: لوحة الإدارة ----------------
@@ -308,7 +311,7 @@ with tab3:
             st.dataframe(export_df, use_container_width=True)
             
             csv = export_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="📥 تصدير التقرير المالي كـ CSV", data=csv, file_name="payroll_deductions_report.csv", mime="text/csv")
+            st.download_button(label="📥 Export to CSV", data=csv, file_name="payroll_report.csv", mime="text/csv")
             
         if st.button("تسجيل الخروج", key="logout_tab3"):
             st.session_state.authenticated = False
