@@ -1,5 +1,5 @@
 # =============================================================
-# HR Disciplinary Management System — Clean Production v3.7
+# HR Disciplinary Management System — Clean Production v3.8
 # =============================================================
 # Single-file Streamlit app. SQLite only. No Google Sheets.
 # Phases covered:
@@ -14,6 +14,7 @@
 #   9 – FIXED: Custom deductions now reflect in Emails & DB correctly
 #  10 – ADDED: Visual Penalties Guide for HR
 #  11 – ADDED: Image Attachment Upload (Stored in DB as Base64 & Emailed)
+#  12 – ADDED: Image Viewer Tool in Admin Dashboard to retrieve proofs
 # =============================================================
 
 import re
@@ -41,7 +42,7 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────
-# I18N TRANSLATION DICTIONARY & HELPERS (NEW ADDITION)
+# I18N TRANSLATION DICTIONARY & HELPERS
 # ─────────────────────────────────────────────────────────────
 if "lang" not in st.session_state:
     st.session_state.lang = "en"
@@ -85,7 +86,7 @@ ARABIC_DICT = {
     "🔒 **Promotion freeze** active until **": "🔒 **تجميد ترقية** نشط حتى **",
     "months).": "شهور).",
     
-    # OVERRIDES (NEW)
+    # OVERRIDES
     "🚨 Force Direct Investigation (Bypass Escalation)": "🚨 تحويل مباشر للتحقيق (تخطي السلم)",
     "Deduction Days Override (Optional)": "تعديل أيام الخصم يدوياً (اختياري)",
     "Leave as -1.0 to use default system calculation.": "اتركه على -1.0 لتطبيق الخصم الافتراضي للنظام.",
@@ -111,6 +112,12 @@ ARABIC_DICT = {
     "Record": "سجل",
     "deleted.": "تم حذفه.",
     "No violations logged yet.": "لم يتم تسجيل أي مخالفات بعد.",
+    # Image Viewer UI (NEW)
+    "🖼️ View Proof Image": "🖼️ عرض صورة الإثبات",
+    "Select Record ID to view proof:": "اختر رقم السجل لعرض الصورة:",
+    "👁️ View Image": "👁️ عرض الصورة",
+    "No image attached to this record.": "لا توجد صورة مرفقة مع هذا السجل.",
+    "Proof for Record ID:": "صورة الإثبات للسجل رقم:",
 
     # Tab 3: Reports
     "📊 HR Reports & Analytics": "📊 تقارير وإحصائيات الموارد البشرية",
@@ -231,8 +238,6 @@ with col_lang:
 # SECTION 1 — CONSTANTS & CONFIGURATION
 # =============================================================
 
-# ── Penalty colour → consequence mapping ─────────────────────
-# deduction_days supports 0, 0.5, 2, 4  (stored as REAL in DB)
 PENALTY_MAP: dict[str, dict] = {
     "Yellow": {
         "label":           "Performance Notice",
@@ -244,7 +249,7 @@ PENALTY_MAP: dict[str, dict] = {
     "Orange": {
         "label":           "Performance Flag — 4.5 hrs (Half Day) Deduction",
         "deduction_hours": 4.5,
-        "deduction_days":  0.5,   # FIX: was 0 in v1
+        "deduction_days":  0.5,
         "freeze_months":   0,
         "badge":           "🟠",
     },
@@ -271,7 +276,6 @@ PENALTY_MAP: dict[str, dict] = {
     },
 }
 
-# ── Violation matrix (mirrors the Excel requirements sheet) ──
 MATRIX_DATA: dict[str, dict] = {
     "Attendance & Adherence": {
         "Late Arrival": {
@@ -433,14 +437,11 @@ MATRIX_DATA: dict[str, dict] = {
     },
 }
 
-# ── Secrets (safe defaults for local dev without secrets.toml) ──
 def _secret(key: str, default: str = "") -> str:
-    """Read from st.secrets without raising KeyError."""
     try:
         return st.secrets[key]
     except (KeyError, FileNotFoundError):
         return default
-
 
 SENDER_EMAIL      = _secret("EMAIL")
 SENDER_PASSWORD   = _secret("PASSWORD")
@@ -454,13 +455,8 @@ HR_ADMIN_PASSWORD = _secret("HR_ADMIN_PASSWORD", "admin123")
 
 DB_FILE = "hr_system.db"
 
-
 @contextmanager
 def _db():
-    """
-    Context manager that yields a committed-or-rolled-back connection.
-    Always closes the connection, even on exception.
-    """
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
@@ -472,14 +468,8 @@ def _db():
     finally:
         conn.close()
 
-
 def init_db() -> None:
-    """
-    Create tables and run lightweight schema migrations.
-    Safe to call on every app startup — all operations are idempotent.
-    """
     with _db() as conn:
-        # ── Create tables ────────────────────────────────
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS employees (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -506,28 +496,15 @@ def init_db() -> None:
             );
         """)
 
-        # ── Migration 1: add submitted_by if missing ──────
-        existing_cols = {
-            r[1] for r in conn.execute("PRAGMA table_info(violations)")
-        }
+        existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(violations)")}
+        
         if "submitted_by" not in existing_cols:
-            conn.execute(
-                "ALTER TABLE violations "
-                "ADD COLUMN submitted_by TEXT NOT NULL DEFAULT ''"
-            )
+            conn.execute("ALTER TABLE violations ADD COLUMN submitted_by TEXT NOT NULL DEFAULT ''")
             
-        # ── Migration 1.5: add proof_image if missing ──────
         if "proof_image" not in existing_cols:
-            conn.execute(
-                "ALTER TABLE violations "
-                "ADD COLUMN proof_image TEXT NOT NULL DEFAULT ''"
-            )
+            conn.execute("ALTER TABLE violations ADD COLUMN proof_image TEXT NOT NULL DEFAULT ''")
 
-        # ── Migration 2: fix INTEGER → REAL for deduction_days ──
-        col_types = {
-            r[1]: r[2].upper()
-            for r in conn.execute("PRAGMA table_info(violations)")
-        }
+        col_types = {r[1]: r[2].upper() for r in conn.execute("PRAGMA table_info(violations)")}
         if col_types.get("deduction_days", "REAL") == "INTEGER":
             conn.executescript("""
                 ALTER TABLE violations RENAME TO violations_v1;
@@ -563,20 +540,11 @@ def init_db() -> None:
                 DROP TABLE violations_v1;
             """)
 
-
-# ── Employee CRUD ─────────────────────────────────────────────
-
 def get_employees() -> pd.DataFrame:
     with _db() as conn:
-        return pd.read_sql_query(
-            "SELECT * FROM employees ORDER BY name", conn
-        )
+        return pd.read_sql_query("SELECT * FROM employees ORDER BY name", conn)
 
-
-def save_employee(
-    name: str, email: str, dept: str, manager: str
-) -> None:
-    """Insert or update employee by name (UNIQUE constraint)."""
+def save_employee(name: str, email: str, dept: str, manager: str) -> None:
     with _db() as conn:
         conn.execute(
             """INSERT INTO employees (name, email, department, manager_email)
@@ -588,13 +556,9 @@ def save_employee(
             (name, email, dept, manager),
         )
 
-
 def delete_employee(name: str) -> None:
     with _db() as conn:
         conn.execute("DELETE FROM employees WHERE name = ?", (name,))
-
-
-# ── Violation CRUD ────────────────────────────────────────────
 
 def insert_violation(
     emp_name: str,
@@ -603,19 +567,12 @@ def insert_violation(
     penalty_color: str,
     comment: str,
     submitted_by: str,
-    override_days: float = None,  # ADDED PARAMETER FOR OVERRIDE
-    proof_image: str = ""         # ADDED PARAMETER FOR IMAGE
+    override_days: float = None,
+    proof_image: str = ""
 ) -> None:
-    """
-    Persist a new violation.
-    All derived fields (label, deductions, freeze) come from PENALTY_MAP,
-    never from the UI — prevents data inconsistency.
-    """
     p = PENALTY_MAP[penalty_color]
-    # ADDED LOGIC to apply override if provided
     applied_deduction = override_days if override_days is not None and override_days >= 0 else p["deduction_days"]
     
-    # Dynamic DB Label if Overridden
     if applied_deduction != p["deduction_days"] and penalty_color != "Investigation":
         actual_label = f"{penalty_color} Card — {applied_deduction} Days Deduction (Override)"
     else:
@@ -637,11 +594,9 @@ def insert_violation(
             ),
         )
 
-
 def delete_violation(vid: int) -> None:
     with _db() as conn:
         conn.execute("DELETE FROM violations WHERE id = ?", (vid,))
-
 
 def get_violations(
     employee:  str | None = None,
@@ -650,11 +605,6 @@ def get_violations(
     incident:  str | None = None,
     penalty:   str | None = None,
 ) -> pd.DataFrame:
-    """
-    Parameterised, filtered query.
-    Pass None for any field to skip that filter.
-    'All' sentinel is handled by the callers — they pass None here.
-    """
     clauses: list[str] = ["1=1"]
     params:  list      = []
 
@@ -683,29 +633,17 @@ def get_violations(
     with _db() as conn:
         df = pd.read_sql_query(sql, conn, params=params)
 
-    # Guarantee numeric dtypes even when result is empty
     for col in ("deduction_hours", "deduction_days", "freeze_months"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     return df
 
-
 # =============================================================
 # SECTION 3 — BUSINESS LOGIC
 # =============================================================
 
-def calculate_next_penalty(
-    emp_name: str, category: str, incident: str
-) -> str:
-    """
-    Determine the correct next penalty colour for this employee + incident.
-
-    Algorithm:
-      1. Count violations within the incident's reset window.
-      2. Skip terminal 'Investigation' violations (they don't escalate).
-      3. Index into the escalation list; cap at the last entry if exhausted.
-    """
+def calculate_next_penalty(emp_name: str, category: str, incident: str) -> str:
     meta       = MATRIX_DATA[category][incident]
     escalation = meta["escalation"]
     reset_days = meta["reset"]
@@ -724,9 +662,8 @@ def calculate_next_penalty(
         ).fetchone()
 
     count = row[0] if row else 0
-    index = min(count, len(escalation) - 1)   # never raises IndexError
+    index = min(count, len(escalation) - 1)
     return escalation[index]
-
 
 # =============================================================
 # SECTION 4 — EMAIL SERVICE
@@ -734,10 +671,8 @@ def calculate_next_penalty(
 
 _EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-
 def _valid_email(addr: str) -> bool:
     return bool(_EMAIL_REGEX.match(addr.strip()))
-
 
 def send_notifications(
     emp_email:     str,
@@ -748,25 +683,15 @@ def send_notifications(
     penalty_color: str,
     comment:       str,
     applied_days:  float = None,
-    proof_b64:     str = "",     # ADDED PARAMETER FOR IMAGE
+    proof_b64:     str = "",
 ) -> tuple[bool, str]:
-    """
-    Send disciplinary emails to the employee and their manager.
-
-    Returns (success: bool, message: str).
-    Pure logic — no Streamlit calls, making it testable in isolation.
-
-    Investigation triggers:
-      • Suspension email to employee.
-      • Manager email CC'd to HR Director.
-    """
+    
     if not SENDER_EMAIL or not SENDER_PASSWORD:
         return False, "Email credentials missing in secrets.toml."
 
     p         = PENALTY_MAP[penalty_color]
     is_invest = penalty_color == "Investigation"
 
-    # Dynamic Email Label if Overridden
     if applied_days is not None and applied_days != p["deduction_days"] and not is_invest:
         actual_label = f"{penalty_color} Card — {applied_days} Days Deduction (Override)"
     else:
@@ -776,7 +701,6 @@ def send_notifications(
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as srv:
             srv.login(SENDER_EMAIL, SENDER_PASSWORD)
 
-            # ── 1. Employee notification ─────────────────
             if _valid_email(emp_email):
                 msg = MIMEMultipart()
                 msg["From"]    = SENDER_EMAIL
@@ -807,7 +731,6 @@ def send_notifications(
                     )
                 msg.attach(MIMEText(body, "plain", "utf-8"))
                 
-                # Attach Image if exists
                 if proof_b64:
                     try:
                         img_data = base64.b64decode(proof_b64)
@@ -818,7 +741,6 @@ def send_notifications(
                 
                 srv.sendmail(SENDER_EMAIL, [emp_email], msg.as_string())
 
-            # ── 2. Manager notification ──────────────────
             if manager_email and _valid_email(manager_email):
                 mgr = MIMEMultipart()
                 mgr["From"]    = SENDER_EMAIL
@@ -840,14 +762,12 @@ def send_notifications(
                         "\n\n🚨 IMPORTANT: This employee is SUSPENDED. "
                         "Do NOT allow them on-site until HR clearance is issued."
                     )
-                    # Deduplicate in case manager IS the HR director
                     recipients = list({manager_email, HR_MANAGER_EMAIL} - {""})
                 else:
                     recipients = [manager_email]
 
                 mgr.attach(MIMEText(mgr_body, "plain", "utf-8"))
                 
-                # Attach Image if exists
                 if proof_b64:
                     try:
                         img_data = base64.b64decode(proof_b64)
@@ -867,19 +787,11 @@ def send_notifications(
     except OSError as exc:
         return False, f"Network error: {exc}"
 
-
 # =============================================================
 # SECTION 5 — AUTHENTICATION
 # =============================================================
 
 def require_auth(page_key: str) -> bool:
-    """
-    Show a password form and return True when authenticated.
-
-    FIX: Per-page state keys (auth_tab2, auth_tab3 are independent).
-    The old shared 'authenticated' key let Tab-2 auth also unlock Tab-3.
-    FIX: Never calls st.stop() — callers use `if not require_auth(): pass`.
-    """
     state_key = f"auth_{page_key}"
     if st.session_state.get(state_key):
         return True
@@ -898,23 +810,19 @@ def require_auth(page_key: str) -> bool:
 
     return False
 
-
 def _logout_button(page_key: str) -> None:
     _, btn_col = st.columns([9, 1])
     if btn_col.button(_t("Logout"), key=f"logout_{page_key}"):
         st.session_state[f"auth_{page_key}"] = False
         st.rerun()
 
-
 # =============================================================
 # SECTION 6 — SHARED UI HELPERS
 # =============================================================
 
 def _kpi_row(df: pd.DataFrame) -> None:
-    """Four summary metric cards shown above the charts."""
     today = datetime.now()
 
-    # Count employees whose most recent Black-level freeze is still active
     def _active_freeze(sub: pd.DataFrame) -> bool:
         frozen = sub[sub["freeze_months"] > 0]
         if frozen.empty:
@@ -952,7 +860,6 @@ tab_log, tab_admin, tab_reports = st.tabs([
     _t("📊 Reports & Analytics"),
 ])
 
-
 # =============================================================
 # TAB 1 — LOG VIOLATION
 # =============================================================
@@ -964,8 +871,6 @@ with tab_log:
     else:
         st.subheader(_t("Register New Violation"))
 
-        # Dynamic dropdowns — OUTSIDE the form so the incident list
-        # refreshes immediately when the category changes.
         col_cat, col_inc = st.columns(2)
         with col_cat:
             category = st.selectbox(
@@ -1002,13 +907,11 @@ with tab_log:
             )
             st.write(f"{_t('**Escalation path:**')} {path_str}")
 
-            # ADDED: Penalty Guide Reminder
             st.markdown("---")
             st.markdown(f"*{_t('Penalties Guide (Default Deductions):')}*")
             for c, info in PENALTY_MAP.items():
                 st.caption(f"{info['badge']} **{_t(c)}**: {_t(info['label'])}")
 
-        # Stable form fields — only submitted when the button is clicked.
         with st.form("violation_form", clear_on_submit=True):
             f1, f2 = st.columns(2)
             with f1:
@@ -1022,7 +925,6 @@ with tab_log:
                 )
                 
                 st.markdown("---")
-                # NEW ADDITIONS: MANAGER OVERRIDES
                 force_investigation = st.checkbox(_t("🚨 Force Direct Investigation (Bypass Escalation)"))
                 custom_deduction = st.number_input(
                     _t("Deduction Days Override (Optional)"), 
@@ -1038,7 +940,6 @@ with tab_log:
                          "or any mitigating factors.",
                 )
                 
-                # ADDED: Image Upload Feature
                 proof_file = st.file_uploader(
                     _t("Attach Proof Image (Optional)"), 
                     type=["png", "jpg", "jpeg"]
@@ -1052,7 +953,6 @@ with tab_log:
             if not submitted_by.strip():
                 st.error(_t("⚠️ **HR Representative Name** is required. This field is the system's audit trail."))
             else:
-                # Process the uploaded image to Base64
                 proof_b64 = ""
                 if proof_file is not None:
                     try:
@@ -1060,16 +960,13 @@ with tab_log:
                     except Exception as e:
                         st.error(f"Image Error: {e}")
 
-                # 1. Calculate Default Penalty
                 penalty_color = calculate_next_penalty(emp_name, category, incident)
                 
-                # 2. Apply Investigation Override if checked
                 if force_investigation:
                     penalty_color = "Investigation"
                 
                 p_info  = PENALTY_MAP[penalty_color]
                 
-                # 3. Apply Days Override if provided
                 actual_override = custom_deduction if custom_deduction >= 0.0 else None
                 applied_days = actual_override if actual_override is not None else p_info["deduction_days"]
 
@@ -1077,28 +974,24 @@ with tab_log:
                     employees_df["name"] == emp_name
                 ].iloc[0]
 
-                # Persist to DB first — data is safe even if email fails.
                 insert_violation(
                     emp_name, category, incident,
                     penalty_color, comment, submitted_by.strip(),
-                    override_days=actual_override, # PASSING OVERRIDE VALUE TO DB
-                    proof_image=proof_b64          # PASSING IMAGE TO DB
+                    override_days=actual_override,
+                    proof_image=proof_b64          
                 )
 
-                # Send notifications
                 email_ok, email_msg = send_notifications(
                     str(emp_row["email"]),
                     str(emp_row["manager_email"] or ""),
                     emp_name, category, incident,
                     penalty_color, comment,
-                    applied_days=applied_days, # PASSING OVERRIDE VALUE TO EMAILS
-                    proof_b64=proof_b64        # PASSING IMAGE TO EMAILS
+                    applied_days=applied_days,
+                    proof_b64=proof_b64        
                 )
 
-                # ── Outcome feedback ──────────────────────
                 badge = p_info["badge"]
                 
-                # For success message UI display
                 success_label = f"{penalty_color} Card — {applied_days} Days Deduction (Override)" if applied_days != p_info["deduction_days"] and penalty_color != "Investigation" else p_info['label']
 
                 if email_ok:
@@ -1127,7 +1020,6 @@ with tab_log:
                         + timedelta(days=30 * p_info["freeze_months"])
                     ).strftime("%d %b %Y")
                     st.warning(f"{_t('🔒 **Promotion freeze** active until **')}{until}** ({p_info['freeze_months']} {_t('months).')}")
-
 
 # =============================================================
 # TAB 2 — ADMIN DASHBOARD
@@ -1174,7 +1066,6 @@ with tab_admin:
         # ── Employee List ─────────────────────────────────
         emp_df = get_employees()
         if not emp_df.empty:
-            # Translated Headers for Display
             disp_emp = emp_df[["name", "email", "department", "manager_email"]].rename(columns={
                 "name": _t("Full Name *"), "email": _t("Email Address *"), 
                 "department": _t("Department"), "manager_email": _t("Manager Email (CC on penalties)")
@@ -1228,9 +1119,29 @@ with tab_admin:
                 delete_violation(int(del_id))
                 st.success(f"{_t('Record')} **{del_id}** {_t('deleted.')}")
                 st.rerun()
+                
+            # ── View Proof Image (admin view) NEW ────────────
+            st.markdown("---")
+            st.subheader(_t("🖼️ View Proof Image"))
+            view_id = st.selectbox(
+                _t("Select Record ID to view proof:"),
+                v_all["id"].tolist(),
+                key="view_img_sel",
+            )
+            if st.button(_t("👁️ View Image"), key="view_img_btn"):
+                # Fetch the specific base64 string
+                img_b64 = v_all.loc[v_all["id"] == view_id, "proof_image"].iloc[0]
+                if img_b64:
+                    try:
+                        img_data = base64.b64decode(img_b64)
+                        st.image(img_data, caption=f"{_t('Proof for Record ID:')} {view_id}")
+                    except Exception as e:
+                        st.error(f"Error loading image: {e}")
+                else:
+                    st.info(_t("No image attached to this record."))
+                    
         else:
             st.info(_t("No violations logged yet."))
-
 
 # =============================================================
 # TAB 3 — REPORTS & ANALYTICS
