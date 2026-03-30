@@ -1,5 +1,5 @@
 # =============================================================
-# HR Disciplinary Management System — Clean Production v3.8
+# HR Disciplinary Management System — Clean Production v3.9
 # =============================================================
 # Single-file Streamlit app. SQLite only. No Google Sheets.
 # Phases covered:
@@ -15,11 +15,13 @@
 #  10 – ADDED: Visual Penalties Guide for HR
 #  11 – ADDED: Image Attachment Upload (Stored in DB as Base64 & Emailed)
 #  12 – ADDED: Image Viewer Tool in Admin Dashboard to retrieve proofs
+#  13 – CHANGED: Export format from CSV to Excel (.xlsx) with Multi-sheets
 # =============================================================
 
 import re
 import sqlite3
 import base64
+import io
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 
@@ -112,7 +114,7 @@ ARABIC_DICT = {
     "Record": "سجل",
     "deleted.": "تم حذفه.",
     "No violations logged yet.": "لم يتم تسجيل أي مخالفات بعد.",
-    # Image Viewer UI (NEW)
+    # Image Viewer UI
     "🖼️ View Proof Image": "🖼️ عرض صورة الإثبات",
     "Select Record ID to view proof:": "اختر رقم السجل لعرض الصورة:",
     "👁️ View Image": "👁️ عرض الصورة",
@@ -156,7 +158,7 @@ ARABIC_DICT = {
     "💰 Payroll Deduction Summary": "💰 ملخص خصومات الرواتب",
     "Count": "العدد",
     "Active Freeze": "تجميد نشط",
-    "📥 Export Filtered Report (CSV)": "📥 تصدير التقرير (CSV)",
+    "📥 Export Filtered Report (Excel)": "📥 تصدير التقرير (إكسيل)",
     "Yes": "نعم",
     "No": "لا",
 
@@ -1423,15 +1425,21 @@ with tab_reports:
                 )
                 st.dataframe(payroll, use_container_width=True)
 
-                # ── CSV export ────────────────────────────
-                csv_bytes = hist_df.to_csv(index=False).encode("utf-8-sig")
+                # ── Excel export ────────────────────────────
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    hist_df.to_excel(writer, index=False, sheet_name='Violations History')
+                    payroll.to_excel(writer, index=False, sheet_name='Payroll Summary')
+                
+                excel_bytes = buffer.getvalue()
+                
                 st.download_button(
-                    label=_t("📥 Export Filtered Report (CSV)"),
-                    data=csv_bytes,
+                    label=_t("📥 Export Filtered Report (Excel)"),
+                    data=excel_bytes,
                     file_name=(
                         f"hr_report_"
-                        f"{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+                        f"{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
                     ),
-                    mime="text/csv",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
