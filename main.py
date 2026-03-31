@@ -38,10 +38,289 @@ import streamlit as st
 # PAGE CONFIG  (must be the very first Streamlit call)
 # ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="HR Disciplinary System",
-    page_icon="⚖️",
+    page_title="Travel Gate — HR System",
+    page_icon="✈️",
     layout="wide",
 )
+
+# ─────────────────────────────────────────────────────────────
+# BRAND THEME  — Travel Gate (teal #3ECAC0 · orange #F47B3A)
+# ─────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* ── Google Font ───────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Inter:wght@400;500;600;700&display=swap');
+
+/* ── Root variables ─────────────────────────────────────────── */
+:root {
+    --tg-teal:        #3ECAC0;
+    --tg-teal-dark:   #2AADA3;
+    --tg-teal-light:  #E8FAF9;
+    --tg-orange:      #F47B3A;
+    --tg-orange-dark: #D9621F;
+    --tg-white:       #FFFFFF;
+    --tg-bg:          #F5FAFA;
+    --tg-card:        #FFFFFF;
+    --tg-border:      #D0F0EE;
+    --tg-text:        #1C2B2A;
+    --tg-muted:       #5E7A78;
+    --radius:         10px;
+}
+
+/* ── Global reset ───────────────────────────────────────────── */
+html, body, [class*="css"] {
+    font-family: 'Inter', 'Cairo', sans-serif;
+    background-color: var(--tg-bg) !important;
+    color: var(--tg-text) !important;
+}
+
+/* ── Hide default Streamlit chrome ──────────────────────────── */
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding-top: 0 !important; }
+
+/* ── Top brand bar ──────────────────────────────────────────── */
+.tg-topbar {
+    background: linear-gradient(135deg, #3ECAC0 0%, #2AADA3 100%);
+    padding: 18px 32px;
+    border-radius: 0 0 16px 16px;
+    margin: -1rem -1rem 1.5rem -1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 4px 20px rgba(62,202,192,.35);
+}
+.tg-topbar .brand-left { display: flex; align-items: center; gap: 16px; }
+.tg-logo-circle {
+    width: 52px; height: 52px;
+    background: white;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+}
+.tg-brand-name {
+    font-family: 'Inter', sans-serif;
+    font-weight: 900;
+    font-size: 1.5rem;
+    color: white;
+    letter-spacing: 1px;
+    line-height: 1.1;
+}
+.tg-brand-sub {
+    font-family: 'Cairo', sans-serif;
+    font-weight: 400;
+    font-size: 0.85rem;
+    color: rgba(255,255,255,.85);
+}
+.tg-badge {
+    background: var(--tg-orange);
+    color: white;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: .5px;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 6px;
+    background: var(--tg-card);
+    border-radius: var(--radius);
+    padding: 6px;
+    border: 1px solid var(--tg-border);
+    box-shadow: 0 2px 8px rgba(62,202,192,.1);
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--tg-muted) !important;
+    background: transparent !important;
+    border: none !important;
+    transition: all .2s ease;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    color: var(--tg-teal) !important;
+    background: var(--tg-teal-light) !important;
+}
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, var(--tg-teal) 0%, var(--tg-teal-dark) 100%) !important;
+    color: white !important;
+    box-shadow: 0 4px 12px rgba(62,202,192,.4);
+}
+.stTabs [data-baseweb="tab-highlight"] { display: none; }
+.stTabs [data-baseweb="tab-border"]    { display: none; }
+
+/* ── Buttons ────────────────────────────────────────────────── */
+.stButton > button {
+    background: linear-gradient(135deg, var(--tg-teal) 0%, var(--tg-teal-dark) 100%);
+    color: white !important;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 22px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    box-shadow: 0 3px 10px rgba(62,202,192,.35);
+    transition: all .2s ease;
+    cursor: pointer;
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, var(--tg-teal-dark) 0%, #1F8F87 100%);
+    box-shadow: 0 5px 16px rgba(62,202,192,.5);
+    transform: translateY(-1px);
+}
+.stButton > button:active { transform: translateY(0); }
+
+/* Submit / primary action button (full-width) */
+div[data-testid="stFormSubmitButton"] > button {
+    background: linear-gradient(135deg, var(--tg-orange) 0%, var(--tg-orange-dark) 100%) !important;
+    box-shadow: 0 4px 14px rgba(244,123,58,.4) !important;
+    width: 100%;
+    font-size: 1rem;
+    padding: 14px 22px;
+    border-radius: 10px;
+}
+div[data-testid="stFormSubmitButton"] > button:hover {
+    box-shadow: 0 6px 20px rgba(244,123,58,.55) !important;
+    transform: translateY(-2px);
+}
+
+/* ── Metric cards (KPI row) ─────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: var(--tg-card);
+    border: 1px solid var(--tg-border);
+    border-top: 4px solid var(--tg-teal);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    box-shadow: 0 2px 8px rgba(62,202,192,.1);
+}
+[data-testid="stMetric"] label {
+    color: var(--tg-muted) !important;
+    font-size: 0.8rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}
+[data-testid="stMetricValue"] {
+    color: var(--tg-teal-dark) !important;
+    font-size: 2rem !important;
+    font-weight: 700 !important;
+}
+
+/* ── Text inputs & selects ──────────────────────────────────── */
+input, textarea, select,
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea,
+[data-baseweb="select"] {
+    border-radius: 8px !important;
+    border-color: var(--tg-border) !important;
+    background: white !important;
+    transition: border-color .2s ease, box-shadow .2s ease;
+}
+input:focus, textarea:focus {
+    border-color: var(--tg-teal) !important;
+    box-shadow: 0 0 0 3px rgba(62,202,192,.2) !important;
+    outline: none !important;
+}
+
+/* ── Expanders ──────────────────────────────────────────────── */
+[data-testid="stExpander"] {
+    background: var(--tg-card);
+    border: 1px solid var(--tg-border) !important;
+    border-radius: var(--radius) !important;
+    box-shadow: 0 2px 6px rgba(62,202,192,.07);
+}
+[data-testid="stExpander"] summary {
+    font-weight: 600;
+    color: var(--tg-teal-dark) !important;
+    padding: 12px 16px;
+}
+[data-testid="stExpander"] summary:hover { color: var(--tg-teal) !important; }
+
+/* ── Alerts ─────────────────────────────────────────────────── */
+[data-testid="stAlert"][kind="info"]    { background: #E8FAF9; border-color: var(--tg-teal); }
+[data-testid="stAlert"][kind="success"] { background: #EAFAF1; border-color: #27AE60; }
+[data-testid="stAlert"][kind="warning"] { background: #FFF4EC; border-color: var(--tg-orange); }
+[data-testid="stAlert"][kind="error"]   { background: #FDEDED; border-color: #C0392B; }
+
+/* ── Dataframes ─────────────────────────────────────────────── */
+[data-testid="stDataFrame"] {
+    border-radius: var(--radius) !important;
+    overflow: hidden;
+    border: 1px solid var(--tg-border) !important;
+    box-shadow: 0 2px 8px rgba(62,202,192,.08);
+}
+[data-testid="stDataFrame"] thead tr th {
+    background: linear-gradient(135deg, var(--tg-teal) 0%, var(--tg-teal-dark) 100%) !important;
+    color: white !important;
+    font-weight: 700 !important;
+    font-size: 0.82rem !important;
+    letter-spacing: .4px;
+}
+
+/* ── Form containers ────────────────────────────────────────── */
+[data-testid="stForm"] {
+    background: var(--tg-card);
+    border: 1px solid var(--tg-border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    box-shadow: 0 2px 10px rgba(62,202,192,.08);
+}
+
+/* ── Dividers ───────────────────────────────────────────────── */
+hr { border-color: var(--tg-border) !important; }
+
+/* ── Section headings ───────────────────────────────────────── */
+h1 { color: var(--tg-teal-dark) !important; font-weight: 800 !important; }
+h2 { color: var(--tg-teal-dark) !important; font-weight: 700 !important; font-size: 1.25rem !important; }
+h3 { color: var(--tg-teal-dark) !important; font-weight: 600 !important; }
+
+/* ── Download button ────────────────────────────────────────── */
+[data-testid="stDownloadButton"] > button {
+    background: linear-gradient(135deg, #2ECC71 0%, #27AE60 100%) !important;
+    box-shadow: 0 4px 12px rgba(46,204,113,.35) !important;
+}
+
+/* ── Selectbox ──────────────────────────────────────────────── */
+[data-baseweb="select"] > div {
+    border-radius: 8px !important;
+    border-color: var(--tg-border) !important;
+    background: white !important;
+}
+
+/* ── Checkbox ───────────────────────────────────────────────── */
+[data-baseweb="checkbox"] span[aria-checked="true"] > div {
+    background: var(--tg-teal) !important;
+    border-color: var(--tg-teal) !important;
+}
+
+/* ── Number input ───────────────────────────────────────────── */
+[data-testid="stNumberInput"] button {
+    background: var(--tg-teal-light) !important;
+    color: var(--tg-teal-dark) !important;
+    border-color: var(--tg-border) !important;
+}
+
+/* ── File uploader ──────────────────────────────────────────── */
+[data-testid="stFileUploader"] {
+    background: var(--tg-teal-light) !important;
+    border: 2px dashed var(--tg-teal) !important;
+    border-radius: var(--radius) !important;
+    padding: 12px !important;
+}
+
+/* ── Plotly charts ──────────────────────────────────────────── */
+.js-plotly-plot .plotly .modebar { display: none; }
+
+/* ── Scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--tg-teal-light); }
+::-webkit-scrollbar-thumb { background: var(--tg-teal); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--tg-teal-dark); }
+</style>
+""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────
 # I18N TRANSLATION DICTIONARY & HELPERS
@@ -229,10 +508,27 @@ def _t(text: str) -> str:
             
     return ARABIC_DICT.get(text, text)
 
-# Language Toggle UI
-col_blank, col_lang = st.columns([9, 1])
-with col_lang:
-    if st.button("🌐 عربي/EN", use_container_width=True):
+# ── Brand top-bar with language toggle ──────────────────────
+_lang_label = "🌐 عربي" if st.session_state.lang == "en" else "🌐 EN"
+_sys_label  = "نظام إدارة الإنذارات" if st.session_state.lang == "ar" else "HR Disciplinary System"
+
+_tb_col, _btn_col = st.columns([11, 1])
+with _tb_col:
+    st.markdown(f"""
+    <div class="tg-topbar">
+        <div class="brand-left">
+            <div class="tg-logo-circle">✈️</div>
+            <div>
+                <div class="tg-brand-name">TRAVEL GATE</div>
+                <div class="tg-brand-sub">ترزل جيت للسفر و السياحة &nbsp;|&nbsp; {_sys_label}</div>
+            </div>
+        </div>
+        <div class="tg-badge">⚖️ Disciplinary Portal</div>
+    </div>
+    """, unsafe_allow_html=True)
+with _btn_col:
+    st.markdown("<div style='margin-top:18px'></div>", unsafe_allow_html=True)
+    if st.button(_lang_label, use_container_width=True, key="lang_toggle"):
         st.session_state.lang = "ar" if st.session_state.lang == "en" else "en"
         st.rerun()
 
@@ -872,8 +1168,6 @@ def _kpi_row(df: pd.DataFrame) -> None:
 
 init_db()
 
-st.title(_t("HR Disciplinary Management System"))
-
 tab_log, tab_admin, tab_reports = st.tabs([
     _t("📝 Log Violation"),
     _t("⚙️ Admin Dashboard"),
@@ -1261,7 +1555,7 @@ with tab_reports:
                         df_disp,
                         names="category",
                         title=_t("Violations by Category"),
-                        color_discrete_sequence=px.colors.qualitative.Set2,
+                        color_discrete_sequence=["#3ECAC0","#F47B3A","#2AADA3","#FDB97D","#1F8F87","#FFD580","#7ECECE"],
                     )
                     fig_pie.update_traces(
                         textposition="inside",
@@ -1283,7 +1577,7 @@ with tab_reports:
                         y=_t("Count"),
                         title=_t("Violations per Employee"),
                         color=_t("Count"),
-                        color_continuous_scale="Reds",
+                        color_continuous_scale=["#E8FAF9","#3ECAC0","#1F8F87"],
                     )
                     fig_emp_bar.update_layout(
                         showlegend=False,
@@ -1308,7 +1602,7 @@ with tab_reports:
                     y="count",
                     title=_t("Daily Violation Count"),
                     labels={"date_only": _t("Date"), "count": _t("Violations")},
-                    color_discrete_sequence=["#EF553B"],
+                    color_discrete_sequence=["#F47B3A"],
                 )
                 fig_time.update_layout(
                     bargap=0.25,
@@ -1359,7 +1653,7 @@ with tab_reports:
                         y=_t("Incident"),
                         orientation="h",
                         title=_t("Top 10 Incidents"),
-                        color_discrete_sequence=["#636EFA"],
+                        color_discrete_sequence=["#3ECAC0"],
                     )
                     fig_inc.update_layout(
                         yaxis={"categoryorder": "total ascending"}
