@@ -34,6 +34,14 @@ from email.mime.image import MIMEImage
 
 import streamlit as st
 
+# Optional Google Sheets support — app works fine if package not installed
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials as _GCPCredentials
+    _GSHEETS_AVAILABLE = True
+except ImportError:
+    _GSHEETS_AVAILABLE = False
+
 # ─────────────────────────────────────────────────────────────
 # PAGE CONFIG  (must be the very first Streamlit call)
 # ─────────────────────────────────────────────────────────────
@@ -752,6 +760,16 @@ if not HR_ADMIN_PASSWORD:
     )
     HR_ADMIN_PASSWORD = "__UNSET__"   # ensures login always fails safely
 
+# Google Sheets (optional backup)
+GSHEETS_SPREADSHEET_ID = _secret("GSHEETS_SPREADSHEET_ID")
+
+def _gcp_service_account_info() -> dict | None:
+    """Return the [gcp_service_account] table from secrets, or None if absent."""
+    try:
+        return dict(st.secrets["gcp_service_account"])
+    except (KeyError, FileNotFoundError):
+        return None
+
 
 # =============================================================
 # SECTION 2 — DATABASE LAYER  (SQLite only)
@@ -954,6 +972,113 @@ def get_violations(
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     return df
+
+# =============================================================
+# SECTION 2.5 — GOOGLE SHEETS SYNC  (non-blocking, optional)
+# =============================================================
+
+_VIO_SHEET_HEADERS = [
+    "ID", "Employee", "Category", "Incident", "Penalty", "Penalty Label",
+    "Deduction Hours", "Deduction Days", "Freeze Months",
+    "Comment", "Submitted By", "Date & Time",
+]
+_EMP_SHEET_HEADERS = ["ID", "Name", "Email", "Department", "Manager Email"]
+
+_SHEETS_SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
+
+@st.cache_resource(show_spinner=False)
+def _get_sheets_client():
+    """
+    Lazily initialise and cache a gspread client for the app's lifetime.
+    Returns None when: gspread not installed, credentials missing, or network error.
+    All callers treat None as 'Sheets not configured' — no exceptions propagate.
+    """
+    if not _GSHEETS_AVAILABLE:
+        return None
+    sa_info = _gcp_service_account_info()
+    if not sa_info or not GSHEETS_SPREADSHEET_ID:
+        return None
+    try:
+        creds = _GCPCredentials.from_service_account_info(sa_info, scopes=_SHEETS_SCOPES)
+        return gspread.authorize(creds)
+    except Exception:
+        return None
+
+
+def _sheets_append_violation(row: list) -> None:
+    """
+    Append one violation row to the 'Violations' worksheet.
+    row = [id, employee, category, incident, penalty_color, penalty_label,
+           deduction_hours, deduction_days, freeze_months, comment,
+           submitted_by, created_at]
+    Silently skips (st.warning only) on any error — never blocks the main flow.
+    """
+    try:
+        client = _get_sheets_client()
+        if client is None:
+            return
+        ws = client.open_by_key(GSHEETS_SPREADSHEET_ID).worksheet("Violations")
+        ws.append_row(row, value_input_option="USER_ENTERED")
+    except Exception as exc:
+        st.warning(f"☁️ Google Sheets sync skipped: {exc}")
+
+
+def _sheets_full_sync() -> tuple[bool, str]:
+    """
+    Overwrite both 'Violations' and 'Employees' sheets with all current SQLite data.
+    Returns (True, success_msg) or (False, error_msg).
+    proof_image is intentionally excluded (binary, irrelevant in a sheet).
+    """
+    try:
+        client = _get_sheets_client()
+        if client is None:
+            return False, (
+                "Google Sheets is not configured. "
+                "Add GSHEETS_SPREADSHEET_ID and [gcp_service_account] to secrets.toml."
+            )
+        sh = client.open_by_key(GSHEETS_SPREADSHEET_ID)
+
+        # ── Violations sheet ──────────────────────────────────
+        vio_df = get_violations()
+        ws_vio = sh.worksheet("Violations")
+        ws_vio.clear()
+        ws_vio.update([_VIO_SHEET_HEADERS], "A1")
+        if not vio_df.empty:
+            _vio_cols = [
+                "id", "employee_name", "category", "incident",
+                "penalty_color", "penalty_label", "deduction_hours",
+                "deduction_days", "freeze_months", "comment",
+                "submitted_by", "created_at",
+            ]
+            ws_vio.append_rows(
+                vio_df[_vio_cols].astype(str).values.tolist(),
+                value_input_option="USER_ENTERED",
+            )
+
+        # ── Employees sheet ───────────────────────────────────
+        emp_df = get_employees()
+        ws_emp = sh.worksheet("Employees")
+        ws_emp.clear()
+        ws_emp.update([_EMP_SHEET_HEADERS], "A1")
+        if not emp_df.empty:
+            ws_emp.append_rows(
+                emp_df[["id", "name", "email", "department", "manager_email"]]
+                .astype(str).values.tolist(),
+                value_input_option="USER_ENTERED",
+            )
+
+        return True, (
+            f"✅ Full sync complete — {len(vio_df)} violation(s) and "
+            f"{len(emp_df)} employee(s) written to Google Sheets."
+        )
+
+    except Exception as exc:
+        return False, f"Sync failed: {exc}"
+
 
 # =============================================================
 # SECTION 3 — BUSINESS LOGIC
@@ -1297,8 +1422,27 @@ with tab_log:
                     emp_name, category, incident,
                     penalty_color, comment, submitted_by.strip(),
                     override_days=actual_override,
-                    proof_image=proof_b64          
+                    proof_image=proof_b64
                 )
+
+                # ── Google Sheets: append this violation (non-blocking) ──
+                with _db() as _gc:
+                    _last_id = _gc.execute(
+                        "SELECT id FROM violations ORDER BY id DESC LIMIT 1"
+                    ).fetchone()["id"]
+                _gs_label = (
+                    f"{penalty_color} Card — {applied_days} Days Deduction (Override)"
+                    if applied_days != p_info["deduction_days"] and penalty_color != "Investigation"
+                    else p_info["label"]
+                )
+                _sheets_append_violation([
+                    _last_id, emp_name, category, incident,
+                    penalty_color, _gs_label,
+                    p_info["deduction_hours"], applied_days,
+                    p_info["freeze_months"], comment,
+                    submitted_by.strip(),
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ])
 
                 email_ok, email_msg = send_notifications(
                     str(emp_row["email"]),
@@ -1461,6 +1605,119 @@ with tab_admin:
                     
         else:
             st.info(_t("No violations logged yet."))
+
+        # ── Google Sheets Backup ──────────────────────────────
+        st.divider()
+        st.subheader("☁️ Google Sheets Backup")
+
+        if not GSHEETS_SPREADSHEET_ID:
+            st.info(
+                "Google Sheets sync is **not configured** yet. "
+                "Expand the setup guide below to get started."
+            )
+        else:
+            st.caption(
+                f"📋 Spreadsheet ID: `{GSHEETS_SPREADSHEET_ID}`  \n"
+                "Full sync overwrites both **Violations** and **Employees** sheets "
+                "with the current SQLite data."
+            )
+            if st.button("🔄 Full Sync to Google Sheets", key="gsheets_sync_btn"):
+                with st.spinner("Syncing to Google Sheets…"):
+                    _ok, _msg = _sheets_full_sync()
+                if _ok:
+                    st.success(_msg)
+                else:
+                    st.error(f"Sync failed: {_msg}")
+
+        with st.expander("⚙️ How to Set Up Google Sheets Sync", expanded=not bool(GSHEETS_SPREADSHEET_ID)):
+            st.markdown("""
+### Step-by-step Setup Guide
+
+---
+
+**Step 1 — Create a Google Cloud Project**
+1. Go to [console.cloud.google.com](https://console.cloud.google.com).
+2. Click the project dropdown → **New Project** → give it a name (e.g. `hr-system`) → **Create**.
+
+---
+
+**Step 2 — Enable the required APIs**
+1. Left menu → **APIs & Services → Library**.
+2. Search **Google Sheets API** → **Enable**.
+3. Search **Google Drive API** → **Enable** (required for gspread to work).
+
+---
+
+**Step 3 — Create a Service Account**
+1. Left menu → **APIs & Services → Credentials**.
+2. Click **+ Create Credentials → Service Account**.
+3. Name it (e.g. `hr-sheets`) → **Create and Continue** → **Done**.
+
+---
+
+**Step 4 — Download the JSON Key**
+1. Click the service account email you just created.
+2. Go to the **Keys** tab → **Add Key → Create new key → JSON → Create**.
+3. A `.json` file downloads — treat it like a password, keep it safe.
+
+---
+
+**Step 5 — Create the Google Spreadsheet**
+1. Go to [sheets.google.com](https://sheets.google.com) → create a new **Blank** spreadsheet.
+2. Name it **HR System Backup** (or anything you prefer).
+3. Rename **Sheet1** tab → `Violations`.
+4. Click the **+** button at the bottom → rename the new sheet → `Employees`.
+5. Copy the **Spreadsheet ID** from the URL:
+   ```
+   https://docs.google.com/spreadsheets/d/  ← SPREADSHEET_ID →  /edit
+   ```
+
+---
+
+**Step 6 — Share the Sheet with the Service Account**
+1. Click **Share** (top-right of the spreadsheet).
+2. Paste the service account email (ends with `.iam.gserviceaccount.com`).
+3. Set permission to **Editor** → **Send**.
+
+---
+
+**Step 7 — Add Credentials to `secrets.toml`**
+
+Create or edit `.streamlit/secrets.toml` in the project root and add:
+
+```toml
+GSHEETS_SPREADSHEET_ID = "paste-your-spreadsheet-id-here"
+
+[gcp_service_account]
+type                        = "service_account"
+project_id                  = "from-json-file"
+private_key_id              = "from-json-file"
+private_key                 = "-----BEGIN RSA PRIVATE KEY-----\\nABC...XYZ\\n-----END RSA PRIVATE KEY-----\\n"
+client_email                = "hr-sheets@your-project.iam.gserviceaccount.com"
+client_id                   = "from-json-file"
+auth_uri                    = "https://accounts.google.com/o/oauth2/auth"
+token_uri                   = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url        = "from-json-file"
+```
+
+> ⚠️ For `private_key`: open the downloaded JSON file, copy the entire value of `"private_key"`,
+> and replace every actual newline with `\\n` (two characters: backslash + n).
+
+---
+
+**Step 8 — Restart the App**
+
+After saving `secrets.toml`, restart the Streamlit app (or press **R** in Streamlit Cloud).
+The **Full Sync** button above will then be active.
+
+---
+
+**How it works after setup:**
+- Every new violation → 1 row auto-appended to the **Violations** sheet instantly.
+- Use the **Full Sync** button after deleting records to keep the sheet clean.
+- The sheet is read-only for HR visibility — edits in the sheet do **not** affect the system.
+            """)
 
 # =============================================================
 # TAB 3 — REPORTS & ANALYTICS
