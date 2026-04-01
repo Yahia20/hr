@@ -1108,17 +1108,27 @@ _VIO_SHEET_HEADERS = [
 _EMP_SHEET_HEADERS = ["ID", "Name", "Email", "Department", "Manager Email"]
 
 _SHEETS_SCOPES = [
-    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+
+def _get_or_create_ws(sh, title: str, headers: list):
+    """Return worksheet by title, creating it with headers if it doesn't exist."""
+    try:
+        return sh.worksheet(title)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=1000, cols=len(headers))
+        ws.update([headers], "A1")
+        return ws
 
 
 @st.cache_resource(show_spinner=False)
 def _get_sheets_client():
     """
     Lazily initialise and cache a gspread client for the app's lifetime.
-    Returns None when: gspread not installed, credentials missing, or network error.
-    All callers treat None as 'Sheets not configured' — no exceptions propagate.
+    Uses gspread 6.x service_account_from_dict (replaces deprecated authorize()).
+    Returns None when: gspread not installed, credentials missing, or any error.
     """
     if not _GSHEETS_AVAILABLE:
         return None
@@ -1126,8 +1136,7 @@ def _get_sheets_client():
     if not sa_info or not GSHEETS_SPREADSHEET_ID:
         return None
     try:
-        creds = _GCPCredentials.from_service_account_info(sa_info, scopes=_SHEETS_SCOPES)
-        return gspread.authorize(creds)
+        return gspread.service_account_from_dict(sa_info)
     except Exception:
         return None
 
@@ -1144,7 +1153,8 @@ def _sheets_append_violation(row: list) -> None:
         client = _get_sheets_client()
         if client is None:
             return
-        ws = client.open_by_key(GSHEETS_SPREADSHEET_ID).worksheet("Violations")
+        sh = client.open_by_key(GSHEETS_SPREADSHEET_ID)
+        ws = _get_or_create_ws(sh, "Violations", _VIO_SHEET_HEADERS)
         ws.append_row(row, value_input_option="USER_ENTERED")
     except Exception as exc:
         st.warning(f"☁️ Google Sheets sync skipped: {exc}")
@@ -1165,9 +1175,9 @@ def _sheets_full_sync() -> tuple[bool, str]:
             )
         sh = client.open_by_key(GSHEETS_SPREADSHEET_ID)
 
-        # ── Violations sheet ──────────────────────────────────
+        # ── Violations sheet (auto-create if missing) ─────────
         vio_df = get_violations()
-        ws_vio = sh.worksheet("Violations")
+        ws_vio = _get_or_create_ws(sh, "Violations", _VIO_SHEET_HEADERS)
         ws_vio.clear()
         ws_vio.update([_VIO_SHEET_HEADERS], "A1")
         if not vio_df.empty:
@@ -1182,9 +1192,9 @@ def _sheets_full_sync() -> tuple[bool, str]:
                 value_input_option="USER_ENTERED",
             )
 
-        # ── Employees sheet ───────────────────────────────────
+        # ── Employees sheet (auto-create if missing) ──────────
         emp_df = get_employees()
-        ws_emp = sh.worksheet("Employees")
+        ws_emp = _get_or_create_ws(sh, "Employees", _EMP_SHEET_HEADERS)
         ws_emp.clear()
         ws_emp.update([_EMP_SHEET_HEADERS], "A1")
         if not emp_df.empty:
