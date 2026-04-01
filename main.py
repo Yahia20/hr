@@ -34,6 +34,14 @@ from email.mime.image import MIMEImage
 
 import streamlit as st
 
+# Optional Google Sheets support — app works fine if package not installed
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials as _GCPCredentials
+    _GSHEETS_AVAILABLE = True
+except ImportError:
+    _GSHEETS_AVAILABLE = False
+
 # ─────────────────────────────────────────────────────────────
 # PAGE CONFIG  (must be the very first Streamlit call)
 # ─────────────────────────────────────────────────────────────
@@ -487,6 +495,40 @@ ARABIC_DICT = {
     "Performance Alert — 2 Days Deduction": "إنذار أداء — خصم يومين",
     "Performance Warning — 4 Days Deduction + 3-Month Freeze": "تحذير نهائي — خصم 4 أيام + تجميد 3 شهور",
     "Suspended — Transferred to Investigation on Spot": "إيقاف — تحويل للتحقيق الفوري",
+
+    # Tab 4: Rules Management
+    "📜 Rules Management": "📜 إدارة القواعد",
+    "📜 Rules & Escalation Management": "📜 إدارة القواعد والتصعيد",
+    "Add, edit, or delete violation rules. Changes take effect immediately on new violations.": "إضافة أو تعديل أو حذف قواعد المخالفات. التغييرات تسري فوراً على المخالفات الجديدة.",
+    "Current Rules": "القواعد الحالية",
+    "Description": "الوصف",
+    "Reset (days)": "فترة السماح (أيام)",
+    "Escalation Path": "مسار التصعيد",
+    "Select Rule ID to delete:": "اختر رقم القاعدة للحذف:",
+    "🗑️ Delete Rule": "🗑️ حذف القاعدة",
+    "Rule": "القاعدة",
+    "Select Rule ID to edit:": "اختر رقم القاعدة للتعديل:",
+    "✏️ Load Rule for Editing": "✏️ تحميل القاعدة للتعديل",
+    "No rules configured yet. Use the form below to add the first rule.": "لا توجد قواعد بعد. استخدم النموذج أدناه لإضافة أول قاعدة.",
+    "Edit Rule": "تعديل القاعدة",
+    "Add New Rule": "إضافة قاعدة جديدة",
+    "Rule not found. It may have been deleted.": "لم يتم العثور على القاعدة. ربما تم حذفها.",
+    "Category *": "التصنيف *",
+    "Incident Name *": "اسم المخالفة *",
+    "Reset Period (days) *": "فترة السماح (أيام) *",
+    "HR Note (Optional)": "ملاحظة HR (اختياري)",
+    "Escalation Path": "مسار التصعيد",
+    "Select penalty levels in order (1st offense → last)": "اختر مستويات العقوبة بالترتيب (أول مخالفة ← آخر مخالفة)",
+    "Number of escalation steps": "عدد مراحل التصعيد",
+    "💾 Save Rule": "💾 حفظ القاعدة",
+    "💾 Update Rule": "💾 تحديث القاعدة",
+    "Category is required.": "التصنيف مطلوب.",
+    "Incident Name is required.": "اسم المخالفة مطلوب.",
+    "At least one escalation step is required.": "مطلوب مرحلة تصعيد واحدة على الأقل.",
+    "Rule updated successfully.": "تم تحديث القاعدة بنجاح.",
+    "Rule added successfully.": "تمت إضافة القاعدة بنجاح.",
+    "❌ Cancel Editing": "❌ إلغاء التعديل",
+    "⚠️ No rules configured. Please add rules in the **Rules Management** tab first.": "⚠️ لا توجد قواعد. يرجى إضافة قواعد من تبويب **إدارة القواعد** أولاً.",
 }
 
 def _t(text: str) -> str:
@@ -752,6 +794,16 @@ if not HR_ADMIN_PASSWORD:
     )
     HR_ADMIN_PASSWORD = "__UNSET__"   # ensures login always fails safely
 
+# Google Sheets (optional backup)
+GSHEETS_SPREADSHEET_ID = _secret("GSHEETS_SPREADSHEET_ID")
+
+def _gcp_service_account_info() -> dict | None:
+    """Return the [gcp_service_account] table from secrets, or None if absent."""
+    try:
+        return dict(st.secrets["gcp_service_account"])
+    except (KeyError, FileNotFoundError):
+        return None
+
 
 # =============================================================
 # SECTION 2 — DATABASE LAYER  (SQLite only)
@@ -805,6 +857,17 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_vio_created  ON violations(created_at);
             CREATE INDEX IF NOT EXISTS idx_vio_incident ON violations(incident);
             CREATE INDEX IF NOT EXISTS idx_vio_penalty  ON violations(penalty_color);
+
+            CREATE TABLE IF NOT EXISTS rules (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                category         TEXT    NOT NULL,
+                incident         TEXT    NOT NULL,
+                description      TEXT    DEFAULT '',
+                hr_note          TEXT    DEFAULT '',
+                reset_days       INTEGER NOT NULL DEFAULT 30,
+                escalation_json  TEXT    NOT NULL DEFAULT '["Yellow"]',
+                UNIQUE(category, incident)
+            );
         """)
 
         existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(violations)")}
@@ -850,6 +913,84 @@ def init_db() -> None:
 
                 DROP TABLE violations_v1;
             """)
+
+        # Seed rules table from MATRIX_DATA if empty (first run only)
+        count = conn.execute("SELECT COUNT(*) FROM rules").fetchone()[0]
+        if count == 0:
+            import json as _json
+            for cat, incidents in MATRIX_DATA.items():
+                for inc_name, meta in incidents.items():
+                    conn.execute(
+                        """INSERT OR IGNORE INTO rules
+                           (category, incident, description, hr_note, reset_days, escalation_json)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (
+                            cat, inc_name,
+                            meta.get("details", ""),
+                            meta.get("hr_note", ""),
+                            meta["reset"],
+                            _json.dumps(meta["escalation"]),
+                        ),
+                    )
+
+
+# ── Rules CRUD ────────────────────────────────────────────────
+
+import json as _json   # noqa: E402  (needed for escalation_json serialisation)
+
+def get_rules() -> pd.DataFrame:
+    with _db() as conn:
+        return pd.read_sql_query(
+            "SELECT * FROM rules ORDER BY category, incident", conn
+        )
+
+def get_matrix_from_rules() -> dict[str, dict]:
+    """Build MATRIX_DATA-format dict from the rules table."""
+    matrix: dict[str, dict] = {}
+    with _db() as conn:
+        rows = conn.execute("SELECT * FROM rules ORDER BY category, incident").fetchall()
+    for r in rows:
+        cat = r["category"]
+        inc = r["incident"]
+        matrix.setdefault(cat, {})[inc] = {
+            "reset":      r["reset_days"],
+            "escalation": _json.loads(r["escalation_json"]),
+            "details":    r["description"] or "",
+            "hr_note":    r["hr_note"] or "",
+        }
+    return matrix
+
+def save_rule(
+    category: str,
+    incident: str,
+    description: str,
+    hr_note: str,
+    reset_days: int,
+    escalation: list[str],
+    rule_id: int | None = None,
+) -> None:
+    esc_json = _json.dumps(escalation)
+    with _db() as conn:
+        if rule_id:
+            conn.execute(
+                """UPDATE rules
+                   SET category=?, incident=?, description=?, hr_note=?,
+                       reset_days=?, escalation_json=?
+                   WHERE id=?""",
+                (category, incident, description, hr_note, reset_days, esc_json, rule_id),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO rules
+                   (category, incident, description, hr_note, reset_days, escalation_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (category, incident, description, hr_note, reset_days, esc_json),
+            )
+
+def delete_rule(rule_id: int) -> None:
+    with _db() as conn:
+        conn.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
+
 
 def get_employees() -> pd.DataFrame:
     with _db() as conn:
@@ -956,11 +1097,119 @@ def get_violations(
     return df
 
 # =============================================================
+# SECTION 2.5 — GOOGLE SHEETS SYNC  (non-blocking, optional)
+# =============================================================
+
+_VIO_SHEET_HEADERS = [
+    "ID", "Employee", "Category", "Incident", "Penalty", "Penalty Label",
+    "Deduction Hours", "Deduction Days", "Freeze Months",
+    "Comment", "Submitted By", "Date & Time",
+]
+_EMP_SHEET_HEADERS = ["ID", "Name", "Email", "Department", "Manager Email"]
+
+_SHEETS_SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
+
+@st.cache_resource(show_spinner=False)
+def _get_sheets_client():
+    """
+    Lazily initialise and cache a gspread client for the app's lifetime.
+    Returns None when: gspread not installed, credentials missing, or network error.
+    All callers treat None as 'Sheets not configured' — no exceptions propagate.
+    """
+    if not _GSHEETS_AVAILABLE:
+        return None
+    sa_info = _gcp_service_account_info()
+    if not sa_info or not GSHEETS_SPREADSHEET_ID:
+        return None
+    try:
+        creds = _GCPCredentials.from_service_account_info(sa_info, scopes=_SHEETS_SCOPES)
+        return gspread.authorize(creds)
+    except Exception:
+        return None
+
+
+def _sheets_append_violation(row: list) -> None:
+    """
+    Append one violation row to the 'Violations' worksheet.
+    row = [id, employee, category, incident, penalty_color, penalty_label,
+           deduction_hours, deduction_days, freeze_months, comment,
+           submitted_by, created_at]
+    Silently skips (st.warning only) on any error — never blocks the main flow.
+    """
+    try:
+        client = _get_sheets_client()
+        if client is None:
+            return
+        ws = client.open_by_key(GSHEETS_SPREADSHEET_ID).worksheet("Violations")
+        ws.append_row(row, value_input_option="USER_ENTERED")
+    except Exception as exc:
+        st.warning(f"☁️ Google Sheets sync skipped: {exc}")
+
+
+def _sheets_full_sync() -> tuple[bool, str]:
+    """
+    Overwrite both 'Violations' and 'Employees' sheets with all current SQLite data.
+    Returns (True, success_msg) or (False, error_msg).
+    proof_image is intentionally excluded (binary, irrelevant in a sheet).
+    """
+    try:
+        client = _get_sheets_client()
+        if client is None:
+            return False, (
+                "Google Sheets is not configured. "
+                "Add GSHEETS_SPREADSHEET_ID and [gcp_service_account] to secrets.toml."
+            )
+        sh = client.open_by_key(GSHEETS_SPREADSHEET_ID)
+
+        # ── Violations sheet ──────────────────────────────────
+        vio_df = get_violations()
+        ws_vio = sh.worksheet("Violations")
+        ws_vio.clear()
+        ws_vio.update([_VIO_SHEET_HEADERS], "A1")
+        if not vio_df.empty:
+            _vio_cols = [
+                "id", "employee_name", "category", "incident",
+                "penalty_color", "penalty_label", "deduction_hours",
+                "deduction_days", "freeze_months", "comment",
+                "submitted_by", "created_at",
+            ]
+            ws_vio.append_rows(
+                vio_df[_vio_cols].astype(str).values.tolist(),
+                value_input_option="USER_ENTERED",
+            )
+
+        # ── Employees sheet ───────────────────────────────────
+        emp_df = get_employees()
+        ws_emp = sh.worksheet("Employees")
+        ws_emp.clear()
+        ws_emp.update([_EMP_SHEET_HEADERS], "A1")
+        if not emp_df.empty:
+            ws_emp.append_rows(
+                emp_df[["id", "name", "email", "department", "manager_email"]]
+                .astype(str).values.tolist(),
+                value_input_option="USER_ENTERED",
+            )
+
+        return True, (
+            f"✅ Full sync complete — {len(vio_df)} violation(s) and "
+            f"{len(emp_df)} employee(s) written to Google Sheets."
+        )
+
+    except Exception as exc:
+        return False, f"Sync failed: {exc}"
+
+
+# =============================================================
 # SECTION 3 — BUSINESS LOGIC
 # =============================================================
 
 def calculate_next_penalty(emp_name: str, category: str, incident: str) -> str:
-    meta       = MATRIX_DATA[category][incident]
+    _live = get_matrix_from_rules()
+    meta       = _live[category][incident]
     escalation = meta["escalation"]
     reset_days = meta["reset"]
     cutoff     = (
@@ -1168,10 +1417,11 @@ def _kpi_row(df: pd.DataFrame) -> None:
 
 init_db()
 
-tab_log, tab_admin, tab_reports = st.tabs([
+tab_log, tab_admin, tab_reports, tab_rules = st.tabs([
     _t("📝 Log Violation"),
     _t("⚙️ Admin Dashboard"),
     _t("📊 Reports & Analytics"),
+    _t("📜 Rules Management"),
 ])
 
 # =============================================================
@@ -1179,9 +1429,12 @@ tab_log, tab_admin, tab_reports = st.tabs([
 # =============================================================
 with tab_log:
     employees_df = get_employees()
+    _LIVE_MATRIX = get_matrix_from_rules()
 
     if employees_df.empty:
         st.warning(_t("⚠️ No employees found. Please add employees in the **Admin Dashboard** tab first."))
+    elif not _LIVE_MATRIX:
+        st.warning(_t("⚠️ No rules configured. Please add rules in the **Rules Management** tab first."))
     else:
         st.subheader(_t("Register New Violation"))
 
@@ -1189,19 +1442,19 @@ with tab_log:
         with col_cat:
             category = st.selectbox(
                 _t("Violation Category"),
-                list(MATRIX_DATA.keys()),
+                list(_LIVE_MATRIX.keys()),
                 format_func=lambda x: _t(x),
                 key="t1_cat",
             )
         with col_inc:
             incident = st.selectbox(
                 _t("Incident Type"),
-                list(MATRIX_DATA[category].keys()),
+                list(_LIVE_MATRIX[category].keys()),
                 format_func=lambda x: _t(x),
                 key="t1_inc",
             )
 
-        inc_meta   = MATRIX_DATA[category][incident]
+        inc_meta   = _LIVE_MATRIX[category][incident]
         escalation = inc_meta["escalation"]
         reset_days = inc_meta["reset"]
         details    = inc_meta.get("details", "")
@@ -1297,8 +1550,27 @@ with tab_log:
                     emp_name, category, incident,
                     penalty_color, comment, submitted_by.strip(),
                     override_days=actual_override,
-                    proof_image=proof_b64          
+                    proof_image=proof_b64
                 )
+
+                # ── Google Sheets: append this violation (non-blocking) ──
+                with _db() as _gc:
+                    _last_id = _gc.execute(
+                        "SELECT id FROM violations ORDER BY id DESC LIMIT 1"
+                    ).fetchone()["id"]
+                _gs_label = (
+                    f"{penalty_color} Card — {applied_days} Days Deduction (Override)"
+                    if applied_days != p_info["deduction_days"] and penalty_color != "Investigation"
+                    else p_info["label"]
+                )
+                _sheets_append_violation([
+                    _last_id, emp_name, category, incident,
+                    penalty_color, _gs_label,
+                    p_info["deduction_hours"], applied_days,
+                    p_info["freeze_months"], comment,
+                    submitted_by.strip(),
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ])
 
                 email_ok, email_msg = send_notifications(
                     str(emp_row["email"]),
@@ -1462,6 +1734,119 @@ with tab_admin:
         else:
             st.info(_t("No violations logged yet."))
 
+        # ── Google Sheets Backup ──────────────────────────────
+        st.divider()
+        st.subheader("☁️ Google Sheets Backup")
+
+        if not GSHEETS_SPREADSHEET_ID:
+            st.info(
+                "Google Sheets sync is **not configured** yet. "
+                "Expand the setup guide below to get started."
+            )
+        else:
+            st.caption(
+                f"📋 Spreadsheet ID: `{GSHEETS_SPREADSHEET_ID}`  \n"
+                "Full sync overwrites both **Violations** and **Employees** sheets "
+                "with the current SQLite data."
+            )
+            if st.button("🔄 Full Sync to Google Sheets", key="gsheets_sync_btn"):
+                with st.spinner("Syncing to Google Sheets…"):
+                    _ok, _msg = _sheets_full_sync()
+                if _ok:
+                    st.success(_msg)
+                else:
+                    st.error(f"Sync failed: {_msg}")
+
+        with st.expander("⚙️ How to Set Up Google Sheets Sync", expanded=not bool(GSHEETS_SPREADSHEET_ID)):
+            st.markdown("""
+### Step-by-step Setup Guide
+
+---
+
+**Step 1 — Create a Google Cloud Project**
+1. Go to [console.cloud.google.com](https://console.cloud.google.com).
+2. Click the project dropdown → **New Project** → give it a name (e.g. `hr-system`) → **Create**.
+
+---
+
+**Step 2 — Enable the required APIs**
+1. Left menu → **APIs & Services → Library**.
+2. Search **Google Sheets API** → **Enable**.
+3. Search **Google Drive API** → **Enable** (required for gspread to work).
+
+---
+
+**Step 3 — Create a Service Account**
+1. Left menu → **APIs & Services → Credentials**.
+2. Click **+ Create Credentials → Service Account**.
+3. Name it (e.g. `hr-sheets`) → **Create and Continue** → **Done**.
+
+---
+
+**Step 4 — Download the JSON Key**
+1. Click the service account email you just created.
+2. Go to the **Keys** tab → **Add Key → Create new key → JSON → Create**.
+3. A `.json` file downloads — treat it like a password, keep it safe.
+
+---
+
+**Step 5 — Create the Google Spreadsheet**
+1. Go to [sheets.google.com](https://sheets.google.com) → create a new **Blank** spreadsheet.
+2. Name it **HR System Backup** (or anything you prefer).
+3. Rename **Sheet1** tab → `Violations`.
+4. Click the **+** button at the bottom → rename the new sheet → `Employees`.
+5. Copy the **Spreadsheet ID** from the URL:
+   ```
+   https://docs.google.com/spreadsheets/d/  ← SPREADSHEET_ID →  /edit
+   ```
+
+---
+
+**Step 6 — Share the Sheet with the Service Account**
+1. Click **Share** (top-right of the spreadsheet).
+2. Paste the service account email (ends with `.iam.gserviceaccount.com`).
+3. Set permission to **Editor** → **Send**.
+
+---
+
+**Step 7 — Add Credentials to `secrets.toml`**
+
+Create or edit `.streamlit/secrets.toml` in the project root and add:
+
+```toml
+GSHEETS_SPREADSHEET_ID = "paste-your-spreadsheet-id-here"
+
+[gcp_service_account]
+type                        = "service_account"
+project_id                  = "from-json-file"
+private_key_id              = "from-json-file"
+private_key                 = "-----BEGIN RSA PRIVATE KEY-----\\nABC...XYZ\\n-----END RSA PRIVATE KEY-----\\n"
+client_email                = "hr-sheets@your-project.iam.gserviceaccount.com"
+client_id                   = "from-json-file"
+auth_uri                    = "https://accounts.google.com/o/oauth2/auth"
+token_uri                   = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url        = "from-json-file"
+```
+
+> ⚠️ For `private_key`: open the downloaded JSON file, copy the entire value of `"private_key"`,
+> and replace every actual newline with `\\n` (two characters: backslash + n).
+
+---
+
+**Step 8 — Restart the App**
+
+After saving `secrets.toml`, restart the Streamlit app (or press **R** in Streamlit Cloud).
+The **Full Sync** button above will then be active.
+
+---
+
+**How it works after setup:**
+- Every new violation → 1 row auto-appended to the **Violations** sheet instantly.
+- Use the **Full Sync** button after deleting records to keep the sheet clean.
+- The sheet is read-only for HR visibility — edits in the sheet do **not** affect the system.
+            """)
+
 # =============================================================
 # TAB 3 — REPORTS & ANALYTICS
 # =============================================================
@@ -1479,9 +1864,10 @@ with tab_reports:
             all_names = [_t("All")] + sorted(
                 get_employees()["name"].tolist()
             )
+            _rpt_matrix = get_matrix_from_rules()
             all_incidents = [_t("All")] + sorted(
                 inc
-                for cat in MATRIX_DATA.values()
+                for cat in _rpt_matrix.values()
                 for inc in cat
             )
             all_penalties = [_t("All")] + list(PENALTY_MAP.keys())
@@ -1756,3 +2142,202 @@ with tab_reports:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
+
+# =============================================================
+# TAB 4 — RULES MANAGEMENT
+# =============================================================
+with tab_rules:
+    if not require_auth("tab4"):
+        pass
+    else:
+        _logout_button("tab4")
+        st.header(_t("📜 Rules & Escalation Management"))
+        st.caption(_t("Add, edit, or delete violation rules. Changes take effect immediately on new violations."))
+
+        _VALID_PENALTIES = list(PENALTY_MAP.keys())
+
+        # ── State helpers for edit mode ─────────────────────
+        if "edit_rule_id" not in st.session_state:
+            st.session_state.edit_rule_id = None
+
+        # ── Current rules table ─────────────────────────────
+        rules_df = get_rules()
+
+        if not rules_df.empty:
+            st.subheader(_t("Current Rules"))
+
+            # Build display dataframe
+            _rdisp = rules_df.copy()
+            _rdisp["escalation_preview"] = _rdisp["escalation_json"].apply(
+                lambda j: " → ".join(
+                    f"{PENALTY_MAP.get(p, {}).get('badge', '?')} {_t(p)}"
+                    for p in _json.loads(j)
+                )
+            )
+            _rdisp["category"] = _rdisp["category"].apply(_t)
+            _rdisp["incident"] = _rdisp["incident"].apply(_t)
+
+            _rcols = {
+                "id": "ID",
+                "category": _t("Category"),
+                "incident": _t("Incident"),
+                "description": _t("Description"),
+                "reset_days": _t("Reset (days)"),
+                "escalation_preview": _t("Escalation Path"),
+            }
+            st.dataframe(
+                _rdisp[list(_rcols.keys())].rename(columns=_rcols),
+                use_container_width=True,
+                height=min(400, 60 + len(rules_df) * 35),
+            )
+
+            # ── Delete rule ──────────────────────────────
+            st.markdown("---")
+            _del_col, _edit_col = st.columns(2)
+            with _del_col:
+                _del_rule_id = st.selectbox(
+                    _t("Select Rule ID to delete:"),
+                    rules_df["id"].tolist(),
+                    key="del_rule_sel",
+                )
+                if st.button(_t("🗑️ Delete Rule"), key="del_rule_btn"):
+                    delete_rule(int(_del_rule_id))
+                    st.success(f"{_t('Rule')} **{_del_rule_id}** {_t('deleted.')}")
+                    st.rerun()
+
+            # ── Load rule for editing ────────────────────
+            with _edit_col:
+                _edit_rule_id = st.selectbox(
+                    _t("Select Rule ID to edit:"),
+                    rules_df["id"].tolist(),
+                    key="edit_rule_sel",
+                )
+                if st.button(_t("✏️ Load Rule for Editing"), key="load_rule_btn"):
+                    st.session_state.edit_rule_id = int(_edit_rule_id)
+                    st.rerun()
+
+        else:
+            st.info(_t("No rules configured yet. Use the form below to add the first rule."))
+
+        st.divider()
+
+        # ── Add / Edit Form ──────────────────────────────────
+        _editing = st.session_state.edit_rule_id is not None
+        _edit_data: dict = {}
+
+        if _editing and not rules_df.empty:
+            _row = rules_df[rules_df["id"] == st.session_state.edit_rule_id]
+            if not _row.empty:
+                _edit_data = _row.iloc[0].to_dict()
+                _edit_data["escalation"] = _json.loads(_edit_data["escalation_json"])
+
+        _form_title = (
+            f"✏️ {_t('Edit Rule')} (ID: {st.session_state.edit_rule_id})"
+            if _editing and _edit_data
+            else f"➕ {_t('Add New Rule')}"
+        )
+        st.subheader(_form_title)
+
+        if _editing and not _edit_data:
+            st.warning(_t("Rule not found. It may have been deleted."))
+            st.session_state.edit_rule_id = None
+            _editing = False
+
+        with st.form("rule_form", clear_on_submit=not _editing):
+            _rf1, _rf2 = st.columns(2)
+            with _rf1:
+                _r_category = st.text_input(
+                    _t("Category *"),
+                    value=_edit_data.get("category", ""),
+                    placeholder="e.g. Attendance & Adherence",
+                )
+                _r_incident = st.text_input(
+                    _t("Incident Name *"),
+                    value=_edit_data.get("incident", ""),
+                    placeholder="e.g. Late Arrival",
+                )
+                _r_reset = st.number_input(
+                    _t("Reset Period (days) *"),
+                    min_value=1, max_value=365,
+                    value=int(_edit_data.get("reset_days", 30)),
+                )
+
+            with _rf2:
+                _r_desc = st.text_area(
+                    _t("Description"),
+                    value=_edit_data.get("description", ""),
+                    height=80,
+                )
+                _r_hr_note = st.text_area(
+                    _t("HR Note (Optional)"),
+                    value=_edit_data.get("hr_note", ""),
+                    height=80,
+                )
+
+            st.markdown(f"**{_t('Escalation Path')}** — {_t('Select penalty levels in order (1st offense → last)')}")
+
+            _existing_esc = _edit_data.get("escalation", ["Yellow"])
+            _n_steps = st.number_input(
+                _t("Number of escalation steps"),
+                min_value=1, max_value=10,
+                value=max(1, len(_existing_esc)),
+                key="esc_steps",
+            )
+
+            _esc_cols = st.columns(min(int(_n_steps), 5))
+            _esc_vals: list[str] = []
+            for i in range(int(_n_steps)):
+                col_idx = i % min(int(_n_steps), 5)
+                with _esc_cols[col_idx]:
+                    _default_idx = (
+                        _VALID_PENALTIES.index(_existing_esc[i])
+                        if i < len(_existing_esc) and _existing_esc[i] in _VALID_PENALTIES
+                        else 0
+                    )
+                    _step_val = st.selectbox(
+                        f"Step {i + 1}",
+                        _VALID_PENALTIES,
+                        index=_default_idx,
+                        format_func=lambda x: f"{PENALTY_MAP[x]['badge']} {_t(x)}",
+                        key=f"esc_step_{i}",
+                    )
+                    _esc_vals.append(_step_val)
+
+            _submitted_rule = st.form_submit_button(
+                _t("💾 Save Rule") if not _editing else _t("💾 Update Rule"),
+                use_container_width=True,
+            )
+
+        if _submitted_rule:
+            _errors: list[str] = []
+            if not _r_category.strip():
+                _errors.append(_t("Category is required."))
+            if not _r_incident.strip():
+                _errors.append(_t("Incident Name is required."))
+            if not _esc_vals:
+                _errors.append(_t("At least one escalation step is required."))
+
+            if _errors:
+                for _e in _errors:
+                    st.error(f"⚠️ {_e}")
+            else:
+                save_rule(
+                    category=_r_category.strip(),
+                    incident=_r_incident.strip(),
+                    description=_r_desc.strip(),
+                    hr_note=_r_hr_note.strip(),
+                    reset_days=int(_r_reset),
+                    escalation=_esc_vals,
+                    rule_id=st.session_state.edit_rule_id if _editing else None,
+                )
+                if _editing:
+                    st.success(f"✅ {_t('Rule updated successfully.')}")
+                    st.session_state.edit_rule_id = None
+                else:
+                    st.success(f"✅ {_t('Rule added successfully.')}")
+                st.rerun()
+
+        if _editing:
+            if st.button(_t("❌ Cancel Editing"), key="cancel_edit_btn"):
+                st.session_state.edit_rule_id = None
+                st.rerun()
