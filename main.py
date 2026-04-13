@@ -445,10 +445,11 @@ def _secret(key: str, default: str = "") -> str:
     except (KeyError, FileNotFoundError):
         return default
 
-SENDER_EMAIL      = _secret("EMAIL")
-SENDER_PASSWORD   = _secret("PASSWORD")
-HR_MANAGER_EMAIL  = _secret("HR_MANAGER_EMAIL", SENDER_EMAIL)
-HR_ADMIN_PASSWORD = _secret("HR_ADMIN_PASSWORD", "admin123")
+SENDER_EMAIL          = _secret("EMAIL")
+SENDER_PASSWORD       = _secret("PASSWORD")
+HR_MANAGER_EMAIL      = _secret("HR_MANAGER_EMAIL", SENDER_EMAIL)
+_USING_DEFAULT_PASS   = not bool(_secret("HR_ADMIN_PASSWORD"))
+HR_ADMIN_PASSWORD     = _secret("HR_ADMIN_PASSWORD", "admin123")
 
 
 # =============================================================
@@ -470,9 +471,14 @@ def _db():
     finally:
         conn.close()
 
+@st.cache_resource
 def init_db() -> None:
-    with _db() as conn:
-        conn.executescript("""
+    # Phase 1 — initial schema creation.
+    # executescript() issues an implicit COMMIT, so we keep it outside the
+    # _db() context manager to avoid masking its rollback semantics.
+    raw = sqlite3.connect(DB_FILE)
+    try:
+        raw.executescript("""
             CREATE TABLE IF NOT EXISTS employees (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 name          TEXT    UNIQUE NOT NULL,
@@ -497,18 +503,25 @@ def init_db() -> None:
                 created_at      DATETIME NOT NULL
             );
         """)
+    finally:
+        raw.close()
 
+    # Phase 2 — incremental column migrations (use _db() safely here).
+    with _db() as conn:
         existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(violations)")}
-        
+
         if "submitted_by" not in existing_cols:
             conn.execute("ALTER TABLE violations ADD COLUMN submitted_by TEXT NOT NULL DEFAULT ''")
-            
+
         if "proof_image" not in existing_cols:
             conn.execute("ALTER TABLE violations ADD COLUMN proof_image TEXT NOT NULL DEFAULT ''")
 
-        col_types = {r[1]: r[2].upper() for r in conn.execute("PRAGMA table_info(violations)")}
+    # Phase 3 — deduction_days INTEGER → REAL migration (needs executescript again).
+    raw = sqlite3.connect(DB_FILE)
+    try:
+        col_types = {r[1]: r[2].upper() for r in raw.execute("PRAGMA table_info(violations)")}
         if col_types.get("deduction_days", "REAL") == "INTEGER":
-            conn.executescript("""
+            raw.executescript("""
                 ALTER TABLE violations RENAME TO violations_v1;
 
                 CREATE TABLE violations (
@@ -541,6 +554,8 @@ def init_db() -> None:
 
                 DROP TABLE violations_v1;
             """)
+    finally:
+        raw.close()
 
 def get_employees() -> pd.DataFrame:
     with _db() as conn:
@@ -837,7 +852,7 @@ def _kpi_row(df: pd.DataFrame) -> None:
 
     active_freezes = (
         df.groupby("employee_name")
-          .apply(_active_freeze)
+          .apply(_active_freeze, include_groups=False)
           .sum()
     )
 
@@ -855,6 +870,12 @@ def _kpi_row(df: pd.DataFrame) -> None:
 init_db()
 
 st.title(_t("HR Disciplinary Management System"))
+
+if _USING_DEFAULT_PASS:
+    st.warning(
+        "⚠️ **Security Warning:** Admin password is set to the default `admin123`. "
+        "Please configure `HR_ADMIN_PASSWORD` in `.streamlit/secrets.toml` before deploying."
+    )
 
 tab_log, tab_admin, tab_reports = st.tabs([
     _t("📝 Log Violation"),
@@ -972,9 +993,11 @@ with tab_log:
                 actual_override = custom_deduction if custom_deduction >= 0.0 else None
                 applied_days = actual_override if actual_override is not None else p_info["deduction_days"]
 
-                emp_row = employees_df[
-                    employees_df["name"] == emp_name
-                ].iloc[0]
+                emp_rows = employees_df[employees_df["name"] == emp_name]
+                if emp_rows.empty:
+                    st.error(_t("⚠️ Employee not found. Please refresh the page."))
+                    st.stop()
+                emp_row = emp_rows.iloc[0]
 
                 insert_violation(
                     emp_name, category, incident,
@@ -1080,7 +1103,11 @@ with tab_admin:
                 key="del_emp_sel",
             )
             if del_name != _t("— select —"):
-                if st.button(_t("🗑️ Delete Employee"), key="del_emp_btn"):
+                confirm_del_emp = st.checkbox(
+                    _t("I confirm I want to permanently delete this employee"),
+                    key="confirm_del_emp",
+                )
+                if st.button(_t("🗑️ Delete Employee"), key="del_emp_btn", disabled=not confirm_del_emp):
                     delete_employee(del_name)
                     st.success(f"Employee **{del_name}** {_t('removed.')}")
                     st.rerun()
@@ -1117,7 +1144,11 @@ with tab_admin:
                 v_all["id"].tolist(),
                 key="del_v_sel",
             )
-            if st.button(_t("🗑️ Delete Violation Record"), key="del_v_btn"):
+            confirm_del_v = st.checkbox(
+                _t("I confirm I want to permanently delete this violation record"),
+                key="confirm_del_v",
+            )
+            if st.button(_t("🗑️ Delete Violation Record"), key="del_v_btn", disabled=not confirm_del_v):
                 delete_violation(int(del_id))
                 st.success(f"{_t('Record')} **{del_id}** {_t('deleted.')}")
                 st.rerun()
@@ -1131,16 +1162,19 @@ with tab_admin:
                 key="view_img_sel",
             )
             if st.button(_t("👁️ View Image"), key="view_img_btn"):
-                # Fetch the specific base64 string
-                img_b64 = v_all.loc[v_all["id"] == view_id, "proof_image"].iloc[0]
-                if img_b64:
-                    try:
-                        img_data = base64.b64decode(img_b64)
-                        st.image(img_data, caption=f"{_t('Proof for Record ID:')} {view_id}")
-                    except Exception as e:
-                        st.error(f"Error loading image: {e}")
+                matches = v_all.loc[v_all["id"] == view_id, "proof_image"]
+                if matches.empty:
+                    st.warning(_t("Record not found. Please refresh the page."))
                 else:
-                    st.info(_t("No image attached to this record."))
+                    img_b64 = matches.iloc[0]
+                    if img_b64:
+                        try:
+                            img_data = base64.b64decode(img_b64)
+                            st.image(img_data, caption=f"{_t('Proof for Record ID:')} {view_id}")
+                        except Exception as e:
+                            st.error(f"Error loading image: {e}")
+                    else:
+                        st.info(_t("No image attached to this record."))
                     
         else:
             st.info(_t("No violations logged yet."))
