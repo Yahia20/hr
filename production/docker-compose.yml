@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: hr-backend
     ports:
-      - "8000:8000"
+      - "8080:8080"
     # This ensures your container can read your email credentials!
     env_file:
       - ./backend/.env
