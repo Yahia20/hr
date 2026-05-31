@@ -11,3 +11,6 @@ pandas==2.2.2
 openpyxl==3.1.5
 pillow==10.4.0
 email-validator==2.2.0
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.35

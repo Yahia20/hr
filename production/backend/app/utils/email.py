@@ -5,6 +5,7 @@ from email.mime.image import MIMEImage
 import base64
 from ..core.config import settings
 
+
 def send_violation_email(
     emp_email: str,
     manager_email: str,
@@ -14,36 +15,37 @@ def send_violation_email(
     penalty_color: str,
     comment: str,
     applied_days: float,
-    proof_b64: str = ""
+    proof_b64: str = "",
+    smtp_config: dict = None,
 ) -> bool:
-    if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
-        print("❌ SMTP Setup Missing: Please check your .env file for SMTP credentials.")
+    cfg = smtp_config or {}
+    smtp_server   = cfg.get("server")   or settings.SMTP_SERVER
+    smtp_port     = int(cfg.get("port") or settings.SMTP_PORT)
+    smtp_user     = cfg.get("user")     or settings.SMTP_USER
+    smtp_password = cfg.get("password") or settings.SMTP_PASSWORD
+
+    if not smtp_user or not smtp_password:
+        print("❌ SMTP credentials missing — email skipped.")
         return False
 
     try:
-        # Decode the Base64 image ONCE so we can attach it to both emails
         img_data = None
         if proof_b64:
             try:
-                if "," in proof_b64:
-                    proof_b64 = proof_b64.split(",")[1]
-                img_data = base64.b64decode(proof_b64)
-            except Exception as img_err:
-                print(f"⚠️ Failed to decode image: {img_err}")
+                raw = proof_b64.split(",")[1] if "," in proof_b64 else proof_b64
+                img_data = base64.b64decode(raw)
+            except Exception as e:
+                print(f"⚠️ Image decode failed: {e}")
 
-        with smtplib.SMTP_SSL(settings.SMTP_SERVER, settings.SMTP_PORT) as server:
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+        with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+            server.login(smtp_user, smtp_password)
 
-            # ---------------------------------------------------------
-            # 1. Send Professional Email to Employee
-            # ---------------------------------------------------------
             if emp_email:
-                msg_emp = MIMEMultipart()
-                msg_emp["From"] = settings.SMTP_USER
-                msg_emp["To"] = emp_email
-                msg_emp["Subject"] = f"Disciplinary Action: {penalty_color} Card"
-                
-                body_emp = (
+                msg = MIMEMultipart()
+                msg["From"] = smtp_user
+                msg["To"] = emp_email
+                msg["Subject"] = f"Disciplinary Action: {penalty_color} Card"
+                body = (
                     f"Dear {emp_name},\n\n"
                     f"A disciplinary action has been recorded on your file:\n\n"
                     f"  Incident : {incident} ({category})\n"
@@ -52,41 +54,31 @@ def send_violation_email(
                     f"Please adhere to company policies to avoid further escalation.\n\n"
                     f"Human Resources Department"
                 )
-                msg_emp.attach(MIMEText(body_emp, "plain"))
-                
-                # Attach the image if it exists
+                msg.attach(MIMEText(body, "plain"))
                 if img_data:
-                    msg_emp.attach(MIMEImage(img_data, name="proof.jpg"))
+                    msg.attach(MIMEImage(img_data, name="proof.jpg"))
+                server.sendmail(smtp_user, emp_email, msg.as_string())
+                print(f"✅ Email sent to employee: {emp_email}")
 
-                server.sendmail(settings.SMTP_USER, emp_email, msg_emp.as_string())
-                print(f"✅ Professional Email sent to Employee: {emp_email}")
-
-            # ---------------------------------------------------------
-            # 2. Send Professional Email to Manager
-            # ---------------------------------------------------------
             if manager_email:
-                msg_mgr = MIMEMultipart()
-                msg_mgr["From"] = settings.SMTP_USER
-                msg_mgr["To"] = manager_email
-                msg_mgr["Subject"] = f"Manager Alert - {emp_name} received {penalty_color}"
-                
-                body_mgr = (
+                msg = MIMEMultipart()
+                msg["From"] = smtp_user
+                msg["To"] = manager_email
+                msg["Subject"] = f"Manager Alert — {emp_name} received {penalty_color}"
+                body = (
                     f"Dear Manager,\n\n"
                     f"Your team member {emp_name} has received a disciplinary penalty.\n\n"
                     f"  Incident : {incident} ({category})\n"
                     f"  Penalty  : {penalty_color}\n"
                     f"  Notes    : {comment}"
                 )
-                msg_mgr.attach(MIMEText(body_mgr, "plain"))
-                
-                # Attach the exact same image to the manager's email
+                msg.attach(MIMEText(body, "plain"))
                 if img_data:
-                    msg_mgr.attach(MIMEImage(img_data, name="proof.jpg"))
+                    msg.attach(MIMEImage(img_data, name="proof.jpg"))
+                server.sendmail(smtp_user, manager_email, msg.as_string())
+                print(f"✅ Email sent to manager: {manager_email}")
 
-                server.sendmail(settings.SMTP_USER, manager_email, msg_mgr.as_string())
-                print(f"✅ Professional Email sent to Manager: {manager_email}")
-                
         return True
     except Exception as e:
-        print(f"❌ SMTP Error Failed to send email: {e}")
+        print(f"❌ SMTP error: {e}")
         return False
