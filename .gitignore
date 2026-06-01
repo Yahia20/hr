@@ -9,3 +9,6 @@ venv/
 node_modules/
 dist/
 .vite/
+hr system-handoff.zip
+.hr-handoff-extract/
+cdp_e2e.py
