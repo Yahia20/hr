@@ -93,7 +93,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://hr-frontend-618314275727.europe-west1.run.app"],
+    allow_origins=["https://hr-frontend-red-shoreline-2679.fly.dev"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
