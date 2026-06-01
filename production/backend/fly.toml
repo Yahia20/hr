@@ -1,0 +1,31 @@
+# fly.toml app configuration file generated for hr-backend-rosy-current-2101 on 2026-06-01T00:56:51+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'hr-backend-rosy-current-2101'
+primary_region = 'lhr'
+
+[build]
+
+[env]
+  DATABASE_URL = "sqlite:////data/hr_system.db"
+  AUTH_DISABLED = "false"
+
+[mounts]
+  source = "hr_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024

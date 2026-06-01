@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
+    AUTH_DISABLED: bool = False
+
     HR_USERNAME: str = "admin"
     HR_PASSWORD: str = "TravelGate2026!"
 
