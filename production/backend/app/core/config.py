@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
+    HR_USERNAME: str = "admin"
+    HR_PASSWORD: str = "TravelGate2026!"
+
     SMTP_SERVER: str = "smtp.gmail.com"
     SMTP_PORT: int = 465
     SMTP_USER: str = ""
