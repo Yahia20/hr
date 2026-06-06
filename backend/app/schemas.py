@@ -36,5 +36,7 @@ class Violation(BaseModel):
     freeze_months: int
     comment: str
     submitted_by: str
-    proof_image: str
+    # proof_image is intentionally NOT returned in list responses — base64 blobs
+    # bloat payloads (~600 KB each). Use GET /violations/{id}/proof to fetch one.
+    has_proof: bool = False
     created_at: str

@@ -59,10 +59,27 @@ def list_violations(
         clauses.append("penalty_color = ?")
         params.append(penalty)
 
-    sql = f"SELECT * FROM violations WHERE {' AND '.join(clauses)} ORDER BY created_at DESC"
+    # Select every column EXCEPT the heavy base64 proof_image; expose a boolean
+    # flag instead so the grid stays small (a single image can be ~600 KB).
+    sql = (
+        "SELECT id, employee_name, category, incident, penalty_color, penalty_label, "
+        "deduction_hours, deduction_days, freeze_months, comment, submitted_by, "
+        "created_at, (proof_image != '') AS has_proof "
+        f"FROM violations WHERE {' AND '.join(clauses)} ORDER BY created_at DESC"
+    )
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        return [{**dict(r), "has_proof": bool(r["has_proof"])} for r in rows]
+
+
+@router.get("/{vid}/proof")
+def get_proof(vid: int):
+    """Fetch a single violation's proof image (base64) on demand."""
+    with db() as conn:
+        row = conn.execute("SELECT proof_image FROM violations WHERE id = ?", (vid,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Violation not found")
+    return {"id": vid, "proof_image": row["proof_image"] or ""}
 
 
 @router.post("", response_model=Violation, status_code=201)
@@ -102,7 +119,9 @@ def create_violation(payload: ViolationIn):
                 now,
             ),
         )
-        return dict(cur.fetchone())
+        row = dict(cur.fetchone())
+    row["has_proof"] = bool(row.pop("proof_image", ""))
+    return row
 
 
 @router.delete("/{vid}", status_code=204)

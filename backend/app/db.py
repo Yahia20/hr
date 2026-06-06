@@ -49,6 +49,14 @@ def init_db() -> None:
                 proof_image     TEXT     NOT NULL DEFAULT '',
                 created_at      DATETIME NOT NULL
             );
+
+            -- Indexes for the escalation lookup and report filters.
+            CREATE INDEX IF NOT EXISTS idx_violations_emp_inc_date
+                ON violations (employee_name, incident, created_at);
+            CREATE INDEX IF NOT EXISTS idx_violations_created
+                ON violations (created_at);
+            CREATE INDEX IF NOT EXISTS idx_violations_penalty
+                ON violations (penalty_color);
             """
         )
     finally:
