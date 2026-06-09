@@ -6,7 +6,7 @@ import { IC } from "../icons";
 import { Card, BtnPri, BtnSec, PenBadge, FG, inp } from "../components";
 import { GUIDE } from "../tokens";
 
-export default function LogViolation({ lang }) {
+export default function LogViolation({ lang, user }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
 
@@ -15,7 +15,6 @@ export default function LogViolation({ lang }) {
   const [cat, setCat] = useState("");
   const [inc, setInc] = useState("");
   const [emp, setEmp] = useState("");
-  const [rep, setRep] = useState("");
   const [comment, setComment] = useState("");
   const [force, setForce] = useState(false);
   const [override, setOverride] = useState(-1);
@@ -63,14 +62,12 @@ export default function LogViolation({ lang }) {
 
   async function submit() {
     if (!emp) { setMsg({ type: "err", text: t("employee") + " *" }); return; }
-    if (!rep.trim()) { setMsg({ type: "err", text: t("hrRep") + " *" }); return; }
     setSaving(true);
     setMsg(null);
     try {
       const proofB64 = proof.dataUrl ? proof.dataUrl.split(",")[1] || "" : "";
       const payload = {
-        employee_name: emp, category: cat, incident: inc,
-        submitted_by: rep, comment,
+        employee_name: emp, category: cat, incident: inc, comment,
         force_investigation: force,
         override_days: override >= 0 ? Number(override) : null,
         proof_image: proofB64,
@@ -134,8 +131,8 @@ export default function LogViolation({ lang }) {
                 {employees.map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
               </select>
             </FG>
-            <FG label={`${t("hrRep")} *`}>
-              <input style={inp} value={rep} onChange={(e) => setRep(e.target.value)} />
+            <FG label={t("hrRep")}>
+              <input style={{ ...inp, background: S.g50, color: S.g500 }} value={user?.name || ""} readOnly aria-readonly="true" />
             </FG>
           </div>
           <div style={{ marginBottom: 20 }}>

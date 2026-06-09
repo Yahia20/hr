@@ -1,48 +1,48 @@
 const BASE = "/api";
-const AUTH_KEY = "hr_auth";
 
-// sessionStorage (not localStorage): credentials are cleared when the tab
-// closes and aren't shared across tabs. Interim measure until the Phase 2
-// auth module replaces Basic auth with httpOnly cookie sessions.
-export const auth = {
-  get: () => sessionStorage.getItem(AUTH_KEY),
-  set: (username, password) => {
-    sessionStorage.setItem(AUTH_KEY, btoa(`${username}:${password}`));
-  },
-  clear: () => sessionStorage.removeItem(AUTH_KEY),
-};
+// The session is an httpOnly cookie managed by the server; JS never sees it.
+// The CSRF token lives in a readable cookie and is echoed on every mutation.
+function csrfToken() {
+  const m = document.cookie.match(/(?:^|;\s*)hr_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : "";
+}
 
 async function req(path, opts = {}) {
+  const method = (opts.method || "GET").toUpperCase();
   const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
-  const token = auth.get();
-  if (token) headers.Authorization = `Basic ${token}`;
+  if (method !== "GET" && method !== "HEAD") headers["X-CSRF-Token"] = csrfToken();
 
-  const res = await fetch(BASE + path, { ...opts, headers });
+  const res = await fetch(BASE + path, { credentials: "same-origin", ...opts, headers });
   if (res.status === 401) {
-    auth.clear();
     window.dispatchEvent(new Event("hr-logout"));
-    throw new Error("Unauthorized");
+    throw Object.assign(new Error("Unauthorized"), { status: 401 });
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${text}`);
+    let detail = "";
+    try {
+      const body = await res.json();
+      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {
+      detail = "";
+    }
+    throw Object.assign(new Error(detail || `Request failed (${res.status})`), { status: res.status });
   }
   if (res.status === 204) return null;
   return res.json();
 }
 
 export const api = {
-  login: (username, password) => {
-    const token = btoa(`${username}:${password}`);
-    return fetch(`${BASE}/auth/check`, {
-      headers: { Authorization: `Basic ${token}` },
-    }).then((r) => {
-      if (!r.ok) throw new Error("Invalid credentials");
-      auth.set(username, password);
-      return r.json();
-    });
-  },
-  logout: () => auth.clear(),
+  login: (email, password, rememberMe = false) =>
+    req("/auth/login", { method: "POST", body: JSON.stringify({ email, password, remember_me: rememberMe }) }),
+  logout: () => req("/auth/logout", { method: "POST" }).catch(() => null),
+  me: () => req("/auth/me"),
+  forgotPassword: (email) => req("/auth/forgot", { method: "POST", body: JSON.stringify({ email }) }),
+  resetPassword: (token, newPassword) =>
+    req("/auth/reset", { method: "POST", body: JSON.stringify({ token, new_password: newPassword }) }),
+
+  listUsers: () => req("/auth/users"),
+  createUser: (data) => req("/auth/users", { method: "POST", body: JSON.stringify(data) }),
+  deactivateUser: (id) => req(`/auth/users/${id}`, { method: "DELETE" }),
 
   listEmployees: () => req("/employees"),
   createEmployee: (data) => req("/employees", { method: "POST", body: JSON.stringify(data) }),
@@ -68,10 +68,7 @@ export const api = {
     const qs = new URLSearchParams(
       Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")
     ).toString();
-    const token = auth.get();
-    const res = await fetch(`${BASE}/violations/export${qs ? `?${qs}` : ""}`, {
-      headers: token ? { Authorization: `Basic ${token}` } : {},
-    });
+    const res = await fetch(`${BASE}/violations/export${qs ? `?${qs}` : ""}`, { credentials: "same-origin" });
     if (!res.ok) throw new Error(`${res.status}: export failed`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);

@@ -1,14 +1,15 @@
 from collections import Counter
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..auth import ROLE_HR_MANAGER, ROLE_HR_OFFICER, CurrentUser, require_role
 from ..db import db
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
 
 @router.get("/dashboard")
-def dashboard():
+def dashboard(_: CurrentUser = Depends(require_role(ROLE_HR_MANAGER, ROLE_HR_OFFICER))):
     with db() as conn:
         total_v = conn.execute("SELECT COUNT(*) FROM violations").fetchone()[0]
         total_e = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]

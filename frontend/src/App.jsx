@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { auth, api } from "./api";
+import { api } from "./api";
 import { S } from "./tokens";
 import { L } from "./i18n";
 import { IC } from "./icons";
@@ -8,20 +8,41 @@ import Dashboard from "./pages/Dashboard";
 import LogViolation from "./pages/LogViolation";
 import Employees from "./pages/Employees";
 import Reports from "./pages/Reports";
+import Users from "./pages/Users";
 import Login from "./pages/Login";
 
 const PLACEHOLDERS = {
   set: { icon: IC.setBig, title: "comingSoon", sub: "comingSoonSub" },
 };
 
+// Pages each role may open; the first entry is the role's landing page.
+const ROLE_PAGES = {
+  hr_manager: ["dash", "log", "emp", "rep", "users", "set"],
+  hr_officer: ["dash", "log", "emp", "rep"],
+  dept_head: ["rep", "emp"],
+  employee: ["rep"],
+};
+
+function readResetToken() {
+  const token = new URLSearchParams(window.location.search).get("reset_token");
+  return token || null;
+}
+
 export default function HRSystem() {
   const [lang, setLang] = useState("en");
   const [page, setPage] = useState("dash");
   const [collapsed, setCollapsed] = useState(false);
-  const [authed, setAuthed] = useState(!!auth.get());
+  const [user, setUser] = useState(null);
+  const [booting, setBooting] = useState(true);
+  const [resetToken, setResetToken] = useState(readResetToken);
 
+  // Restore the session from the httpOnly cookie on first load.
   useEffect(() => {
-    const h = () => setAuthed(false);
+    api.me()
+      .then(({ user }) => onLogin(user))
+      .catch(() => {})
+      .finally(() => setBooting(false));
+    const h = () => setUser(null);
     window.addEventListener("hr-logout", h);
     return () => window.removeEventListener("hr-logout", h);
   }, []);
@@ -30,19 +51,39 @@ export default function HRSystem() {
   const t = (k) => L[lang][k] || k;
   const sw = collapsed ? 68 : 256;
 
-  if (!authed) {
-    return <Login lang={lang} onSuccess={() => setAuthed(true)} />;
+  function onLogin(u) {
+    setUser(u);
+    setPage((ROLE_PAGES[u.role] || ["rep"])[0]);
   }
 
-  const logout = () => { api.logout(); setAuthed(false); };
+  function clearResetToken() {
+    setResetToken(null);
+    window.history.replaceState(null, "", window.location.pathname);
+  }
 
+  if (booting) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: S.g50, color: S.g400, fontSize: 13, fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
+        {t("loading")}
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login lang={lang} onSuccess={onLogin} resetToken={resetToken} onResetDone={clearResetToken} />;
+  }
+
+  const logout = async () => { await api.logout(); setUser(null); };
+
+  const allowed = ROLE_PAGES[user.role] || ["rep"];
   const navs = [
     { id: "dash", icon: IC.dash },
     { id: "log", icon: IC.log },
     { id: "emp", icon: IC.emp },
     { id: "rep", icon: IC.rep },
+    { id: "users", icon: IC.emp },
     { id: "set", icon: IC.set },
-  ];
+  ].filter((n) => allowed.includes(n.id));
 
   const sidebar = (
     <aside style={{ position: "fixed", top: 0, bottom: 0, [ar ? "right" : "left"]: 0, width: sw, background: S.w, [ar ? "borderLeft" : "borderRight"]: `1px solid ${S.g100}`, display: "flex", flexDirection: "column", transition: "width 0.22s cubic-bezier(.4,0,.2,1)", zIndex: 200, boxShadow: "2px 0 12px rgba(0,0,0,0.04)", overflow: "hidden" }}>
@@ -83,23 +124,30 @@ export default function HRSystem() {
         <button onClick={() => setLang(ar ? "en" : "ar")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", borderRadius: S.rF, border: `1px solid ${S.g200}`, background: S.w, cursor: "pointer", fontSize: 12, color: S.g500, fontWeight: 500, fontFamily: "inherit" }}>{IC.globe} <span>{t("lang")}</span></button>
         <button style={{ width: 36, height: 36, borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", color: S.g400 }}>{IC.bell}</button>
         <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "4px 8px", borderRadius: S.rF }}>
-          <div style={{ width: 32, height: 32, borderRadius: "50%", flexShrink: 0, background: `linear-gradient(135deg,${S.pri},${S.acc})`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 12, fontWeight: 700 }}>{ar ? "\u0623" : "A"}</div>
-          <span style={{ fontSize: 13, fontWeight: 600, color: S.g700 }}>{ar ? "\u0623\u0645\u064A\u0646" : "Amin"}</span>
+          <div style={{ width: 32, height: 32, borderRadius: "50%", flexShrink: 0, background: `linear-gradient(135deg,${S.pri},${S.acc})`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 12, fontWeight: 700 }}>{(user.name || "?").charAt(0).toUpperCase()}</div>
+          <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: S.g700 }}>{user.name}</span>
+            <span style={{ fontSize: 10.5, color: S.g400 }}>{t({ hr_manager: "roleManager", hr_officer: "roleOfficer", dept_head: "roleDeptHead", employee: "roleEmployee" }[user.role] || user.role)}</span>
+          </div>
         </div>
-        <button onClick={logout} title={ar ? "\u062E\u0631\u0648\u062C" : "Logout"} style={{ width: 36, height: 36, borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: S.g400, fontSize: 14, fontFamily: "inherit" }}>{"\u23FB"}</button>
+        <button onClick={logout} title={t("logout")} aria-label={t("logout")} style={{ width: 36, height: 36, borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: S.g400, fontSize: 14, fontFamily: "inherit" }}>{"\u23FB"}</button>
       </div>
     </header>
   );
 
   let content;
-  if (page === "dash") {
-    content = <Dashboard lang={lang} onNewV={() => setPage("log")} onViewAll={() => setPage("rep")} />;
+  if (!allowed.includes(page)) {
+    content = <Card><Empty text={t("noData")} /></Card>;
+  } else if (page === "dash") {
+    content = <Dashboard lang={lang} user={user} onNewV={() => setPage("log")} onViewAll={() => setPage("rep")} />;
   } else if (page === "log") {
-    content = <LogViolation lang={lang} />;
+    content = <LogViolation lang={lang} user={user} />;
   } else if (page === "emp") {
-    content = <Employees lang={lang} />;
+    content = <Employees lang={lang} user={user} />;
   } else if (page === "rep") {
-    content = <Reports lang={lang} />;
+    content = <Reports lang={lang} user={user} />;
+  } else if (page === "users") {
+    content = <Users lang={lang} user={user} />;
   } else {
     const p = PLACEHOLDERS[page];
     content = (

@@ -5,9 +5,11 @@ import { L } from "../i18n";
 import { IC } from "../icons";
 import { Card, Empty, BtnPri, BtnSec, Th, FG, inp } from "../components";
 
-export default function Employees({ lang }) {
+export default function Employees({ lang, user }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
+  const isHR = user?.role === "hr_manager" || user?.role === "hr_officer";
+  const canDelete = user?.role === "hr_manager";
 
   const [list, setList] = useState([]);
   const [search, setSearch] = useState("");
@@ -58,7 +60,7 @@ export default function Employees({ lang }) {
             <span style={{ position: "absolute", [ar ? "right" : "left"]: 12, pointerEvents: "none", display: "flex" }}>{IC.srch}</span>
             <input style={{ ...inp, [ar ? "paddingRight" : "paddingLeft"]: 36, width: 210 }} placeholder={t("search")} value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <BtnPri onClick={() => setOpen(!open)}>{IC.plus} <span>{t("addEmp")}</span></BtnPri>
+          {isHR && <BtnPri onClick={() => setOpen(!open)}>{IC.plus} <span>{t("addEmp")}</span></BtnPri>}
         </div>
       </div>
 
@@ -82,19 +84,21 @@ export default function Employees({ lang }) {
       <Card flush>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr>{[t("name"), t("email"), t("dept"), t("mgrEmail"), t("act")].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
+            <thead><tr>{[t("name"), t("email"), t("dept"), t("mgrEmail"), ...(canDelete ? [t("act")] : [])].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={5}><Empty text={t("noEmp")} sub={ar ? "\u0627\u0633\u062A\u062E\u062F\u0645 \u0632\u0631 \u0627\u0644\u0625\u0636\u0627\u0641\u0629 \u0623\u0639\u0644\u0627\u0647" : "Use the Add Employee button above"} /></td></tr>
+                <tr><td colSpan={canDelete ? 5 : 4}><Empty text={t("noEmp")} sub={ar ? "\u0627\u0633\u062A\u062E\u062F\u0645 \u0632\u0631 \u0627\u0644\u0625\u0636\u0627\u0641\u0629 \u0623\u0639\u0644\u0627\u0647" : "Use the Add Employee button above"} /></td></tr>
               ) : filtered.map((e) => (
                 <tr key={e.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
                   <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{e.name}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.email}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.department}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.manager_email}</td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <button onClick={() => remove(e.name)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
-                  </td>
+                  {canDelete && (
+                    <td style={{ padding: "12px 16px" }}>
+                      <button onClick={() => remove(e.name)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

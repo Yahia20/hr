@@ -57,6 +57,37 @@ def init_db() -> None:
                 ON violations (created_at);
             CREATE INDEX IF NOT EXISTS idx_violations_penalty
                 ON violations (penalty_color);
+
+            CREATE TABLE IF NOT EXISTS users (
+                id              INTEGER  PRIMARY KEY AUTOINCREMENT,
+                email           TEXT     UNIQUE NOT NULL,
+                name            TEXT     NOT NULL,
+                role            TEXT     NOT NULL CHECK (role IN ('hr_manager','hr_officer','dept_head','employee')),
+                department      TEXT     NOT NULL DEFAULT '',
+                password_hash   TEXT     NOT NULL,
+                is_active       INTEGER  NOT NULL DEFAULT 1,
+                failed_attempts INTEGER  NOT NULL DEFAULT 0,
+                locked_until    TEXT,
+                created_at      TEXT     NOT NULL
+            );
+
+            -- Server-side sessions: the cookie holds a random token; only its
+            -- SHA-256 is stored so a DB leak doesn't yield usable sessions.
+            CREATE TABLE IF NOT EXISTS sessions (
+                token_hash TEXT    PRIMARY KEY,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                csrf_token TEXT    NOT NULL,
+                expires_at TEXT    NOT NULL,
+                created_at TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
+
+            CREATE TABLE IF NOT EXISTS password_resets (
+                token_hash TEXT    PRIMARY KEY,
+                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                expires_at TEXT    NOT NULL,
+                used       INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
     finally:

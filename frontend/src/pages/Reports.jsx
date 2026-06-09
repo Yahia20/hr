@@ -7,9 +7,11 @@ import { Card, Empty, KpiCard, BtnPri, BtnSec, Th, FG, PenBadge, inp } from "../
 
 const PENALTIES = ["Yellow", "Orange", "Red", "Black", "Investigation"];
 
-export default function Reports({ lang }) {
+export default function Reports({ lang, user }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
+  const isHR = user?.role === "hr_manager" || user?.role === "hr_officer";
+  const canDelete = user?.role === "hr_manager";
 
   const [employees, setEmployees] = useState([]);
   const [rows, setRows] = useState([]);
@@ -30,7 +32,10 @@ export default function Reports({ lang }) {
     }
   }
 
-  useEffect(() => { api.listEmployees().then(setEmployees).catch(() => {}); }, []);
+  useEffect(() => {
+    if (user?.role === "employee") return; // scoped server-side; no employee list access
+    api.listEmployees().then(setEmployees).catch(() => {});
+  }, []);
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [filters.employee, filters.date_from, filters.date_to, filters.penalty]);
 
   async function remove(id) {
@@ -72,7 +77,7 @@ export default function Reports({ lang }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <BtnSec onClick={() => setFilterOpen(!filterOpen)}>{IC.filter} <span>{t("filters")}</span></BtnSec>
-          <BtnPri onClick={exportExcel}>{IC.dl} <span>{t("export")}</span></BtnPri>
+          {isHR && <BtnPri onClick={exportExcel}>{IC.dl} <span>{t("export")}</span></BtnPri>}
         </div>
       </div>
 
@@ -160,10 +165,10 @@ export default function Reports({ lang }) {
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr>{[t("employee"), t("cat"), t("inc"), t("pen"), t("ded"), t("subBy"), t("date"), t("act")].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
+            <thead><tr>{[t("employee"), t("cat"), t("inc"), t("pen"), t("ded"), t("subBy"), t("date"), ...(canDelete ? [t("act")] : [])].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={8}><Empty text={t("noViol")} /></td></tr>
+                <tr><td colSpan={canDelete ? 8 : 7}><Empty text={t("noViol")} /></td></tr>
               ) : rows.map((r) => (
                 <tr key={r.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
                   <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{r.employee_name}</td>
@@ -173,9 +178,11 @@ export default function Reports({ lang }) {
                   <td style={{ padding: "12px 16px", color: S.g700, fontWeight: 600 }}>{r.deduction_days} {t("days")}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{r.submitted_by}</td>
                   <td style={{ padding: "12px 16px", color: S.g500, fontSize: 12 }}>{r.created_at?.slice(0, 16)}</td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <button onClick={() => remove(r.id)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
-                  </td>
+                  {canDelete && (
+                    <td style={{ padding: "12px 16px" }}>
+                      <button onClick={() => remove(r.id)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

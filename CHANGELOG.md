@@ -1,5 +1,59 @@
 # Changelog
 
+## Phase 2 — Authentication Module (2026-06-09)
+
+Replaces the single shared HTTP Basic credential with per-user accounts, server-side
+sessions, and role-based access control. ⚠️ Breaking: `HR_ADMIN_*` env vars are retired;
+set `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` (+ optional `_NAME`) to
+seed the first HR Manager account on an empty `users` table.
+
+### Backend
+- **Per-user accounts** (`app/db.py`, `app/routers/auth.py`): new `users` table (bcrypt
+  password hashes, role, department, active flag); manager-only user management endpoints
+  (`GET/POST /api/auth/users`, `DELETE /api/auth/users/{id}` deactivates + kills sessions).
+- **Cookie sessions** (`app/auth.py`): `POST /api/auth/login` sets an httpOnly,
+  SameSite=Lax `hr_session` cookie (12 h, or 30 days with *remember me*); only the
+  SHA-256 of the token is stored server-side. `POST /api/auth/logout` revokes it.
+  Set `COOKIE_SECURE=true` in production.
+- **CSRF protection**: double-submit token — readable `hr_csrf` cookie must be echoed in
+  `X-CSRF-Token` on every non-GET request, verified against the session row.
+- **RBAC** — vertical: violations create = Manager/Officer, delete = Manager only;
+  employees write = Manager/Officer, delete = Manager; dashboard/export/proof = Manager/
+  Officer. Horizontal: Department Heads only see their department's employees/violations;
+  Employees only their own violations (scoped SQL, not client-side filtering).
+- **Account lockout** (`app/auth.py`): 5 failed logins per account in 15 min locks the
+  account for 15 min (persisted), on top of Phase 1's per-IP throttle. Generic
+  "Invalid email or password" regardless of which part was wrong.
+- **Password reset** (`app/routers/auth.py`, `app/emailer.py`): `POST /api/auth/forgot`
+  always returns the same body (no user enumeration) and emails a single-use, 60-minute
+  token (SHA-256-stored) via SMTP (`SMTP_HOST/PORT/USER/PASSWORD/FROM`, link base
+  `APP_BASE_URL`); without SMTP the link goes to server logs only. `POST /api/auth/reset`
+  burns the token and revokes all of the user's sessions.
+- **`submitted_by` is now server-derived** from the session user — clients can no longer
+  spoof who logged a violation.
+- `GET /api/auth/check` (Basic) removed; `/api/auth/me` returns the session user.
+
+### Frontend
+- **Login page rebuilt** (`src/pages/Login.jsx`): email + password with client-side
+  validation, show/hide password toggle, *remember me*, forgot-password flow, token reset
+  screen (`/?reset_token=…`), loading states, bilingual (EN/AR) error messages mapped
+  from status codes, brand teal/orange, full RTL/LTR.
+- **Session bootstrap & protected shell** (`src/App.jsx`): `/auth/me` on load restores the
+  session; unauthenticated users only ever see the login screen; nav and landing page are
+  filtered per role; topbar shows the real user's name + role (hardcoded "Amin" removed);
+  logout calls the API and clears the session server-side.
+- **API client** (`src/api.js`): credentials: same-origin cookies, automatic
+  `X-CSRF-Token` header on mutations, no tokens in web storage at all (closes F-2).
+- **Users admin page** (`src/pages/Users.jsx`, HR Manager only): list/create/deactivate
+  accounts with role + department.
+- **Role-aware UI**: Reports hides export/delete from unauthorized roles; Employees page
+  is read-only for Department Heads; Log Violation shows the session user as the
+  (non-editable) HR representative.
+
+### Deferred
+- 2FA (optional scope) — recommend after Phase 3/4.
+- Password change for logged-in users (self-service) — reset flow covers it interim.
+
 ## Phase 1 — Security Audit & Hardening (2026-06-09)
 
 Full findings, exploit scenarios, and severities: [SECURITY_AUDIT.md](SECURITY_AUDIT.md).

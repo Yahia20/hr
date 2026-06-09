@@ -5,7 +5,7 @@ import { L } from "../i18n";
 import { IC } from "../icons";
 import { Card, Empty, KpiCard, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
 
-export default function Dashboard({ lang, onNewV, onViewAll }) {
+export default function Dashboard({ lang, user, onNewV, onViewAll }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
   const [data, setData] = useState(null);
@@ -25,7 +25,7 @@ export default function Dashboard({ lang, onNewV, onViewAll }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 22, fontWeight: 800, color: S.g800, letterSpacing: "-.4px", margin: 0 }}>
-            {t("welcome")}, {ar ? "\u0623\u0645\u064A\u0646" : "Amin"} {"\u{1F44B}"}
+            {t("welcome")}, {user?.name} {"\u{1F44B}"}
           </h2>
           <p style={{ fontSize: 13, color: S.g400, marginTop: 2 }}>{t("todayAct")}</p>
         </div>
