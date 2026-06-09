@@ -56,11 +56,12 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `employees` — name (unique), email, department, manager_email
 - `violations` — employee_name, category, incident, penalty_color, penalty_label, deduction_hours, deduction_days, freeze_months, comment, submitted_by, proof_image (base64), created_at
 
-There is no `rules` or `users` table: the rules matrix lives in `penalties.py`, and admin auth is a single env-configured credential (`HR_ADMIN_USERNAME` / `HR_ADMIN_PASSWORD`) checked in `auth.py`.
+There is no `rules` or `users` table: the rules matrix lives in `penalties.py`, and admin auth is a single env-configured credential checked in `auth.py` (`HR_ADMIN_USERNAME` plus either `HR_ADMIN_PASSWORD_HASH` (bcrypt, preferred) or a strong `HR_ADMIN_PASSWORD`). There is **no default password**: if neither is set (or the password is a known default like `admin123`), the API fails closed with 503. Failed logins are rate-limited per IP (5 per 15 min).
 
 ## Known issues (being fixed)
 - [x] CORS wildcard `*` — now locked to an allow-list via `CORS_ORIGINS` env var
 - [x] No auth guards on API routes — all `/api` routers now require `require_admin`
+- [x] Default `admin123` password — auth now fails closed; bcrypt hash supported; per-IP login lockout (see `SECURITY_AUDIT.md`)
 - [ ] Hardcoded user "Amin" in frontend — no real login flow
 - [ ] Proof images stored as base64 in DB — should use file storage
 - [ ] Design System page visible in production nav — should be hidden

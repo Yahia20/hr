@@ -8,7 +8,7 @@ export default function Login({ lang, onSuccess }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
 
-  const [user, setUser] = useState("hr");
+  const [user, setUser] = useState("");
   const [pass, setPass] = useState("");
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -36,10 +36,10 @@ export default function Login({ lang, onSuccess }) {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
           <FG label={ar ? "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645" : "Username"}>
-            <input style={inp} value={user} onChange={(e) => setUser(e.target.value)} autoFocus />
+            <input style={inp} value={user} onChange={(e) => setUser(e.target.value)} autoComplete="username" autoFocus />
           </FG>
           <FG label={ar ? "\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631" : "Password"}>
-            <input style={inp} type="password" value={pass} onChange={(e) => setPass(e.target.value)} />
+            <input style={inp} type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" />
           </FG>
         </div>
         {err && <div style={{ color: S.err, fontSize: 13, marginBottom: 14, textAlign: "center" }}>{err}</div>}

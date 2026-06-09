@@ -1,12 +1,15 @@
 const BASE = "/api";
 const AUTH_KEY = "hr_auth";
 
+// sessionStorage (not localStorage): credentials are cleared when the tab
+// closes and aren't shared across tabs. Interim measure until the Phase 2
+// auth module replaces Basic auth with httpOnly cookie sessions.
 export const auth = {
-  get: () => localStorage.getItem(AUTH_KEY),
+  get: () => sessionStorage.getItem(AUTH_KEY),
   set: (username, password) => {
-    localStorage.setItem(AUTH_KEY, btoa(`${username}:${password}`));
+    sessionStorage.setItem(AUTH_KEY, btoa(`${username}:${password}`));
   },
-  clear: () => localStorage.removeItem(AUTH_KEY),
+  clear: () => sessionStorage.removeItem(AUTH_KEY),
 };
 
 async function req(path, opts = {}) {

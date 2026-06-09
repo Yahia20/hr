@@ -1,10 +1,26 @@
 import io
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _check_date(value: Optional[str], name: str) -> None:
+    if value and not _DATE_RE.match(value):
+        raise HTTPException(400, f"{name} must be formatted YYYY-MM-DD")
+
+
+def _xlsx_safe(value):
+    """Neutralise Excel formula injection: a cell starting with =, +, -, @ or a
+    control char would otherwise be evaluated as a formula when opened."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 from ..db import db
 from ..penalties import MATRIX_DATA, PENALTY_MAP
@@ -41,6 +57,8 @@ def list_violations(
     incident: Optional[str] = None,
     penalty: Optional[str] = None,
 ):
+    _check_date(date_from, "date_from")
+    _check_date(date_to, "date_to")
     clauses = ["1=1"]
     params: list = []
     if employee:
@@ -159,10 +177,10 @@ def export_violations(
     ws.append(headers)
     for r in rows:
         ws.append([
-            r["id"], r["employee_name"], r["category"], r["incident"],
-            r["penalty_color"], r["penalty_label"],
+            r["id"], _xlsx_safe(r["employee_name"]), _xlsx_safe(r["category"]), _xlsx_safe(r["incident"]),
+            r["penalty_color"], _xlsx_safe(r["penalty_label"]),
             r["deduction_hours"], r["deduction_days"], r["freeze_months"],
-            r["comment"], r["submitted_by"], r["created_at"],
+            _xlsx_safe(r["comment"]), _xlsx_safe(r["submitted_by"]), r["created_at"],
         ])
     buf = io.BytesIO()
     wb.save(buf)
