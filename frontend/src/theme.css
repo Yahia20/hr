@@ -1,0 +1,79 @@
+/* Design tokens as CSS variables so dark mode is a single attribute flip.
+   tokens.js (S / pbStyle) references these via var(...). */
+:root {
+  --pri: #2FB89E; --priD: #1A9E85; --priL: #E6F7F3; --priM: #A8DDD2;
+  --acc: #E8825C;
+  --w: #FFFFFF;
+  --g50: #F5F7FA; --g100: #ECEEF2; --g200: #D9DDE4; --g300: #B8C0CB;
+  /* g400 darkened from #8896A5 for WCAG AA contrast on white (≥4.5:1) */
+  --g400: #5F6E80; --g500: #5C6B7A; --g600: #3E4F5E; --g700: #273545; --g800: #131E2B;
+  --ok: #16A34A; --okL: #ECFDF5; --warn: #D97706; --warnL: #FFFBEB;
+  --err: #DC2626; --errL: #FEF2F2; --info: #2563EB; --infoL: #EFF6FF;
+  --sh0: 0 1px 2px rgba(0,0,0,0.05);
+  --sh1: 0 1px 4px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04);
+  --sh2: 0 8px 30px rgba(0,0,0,0.12);
+  --pY: #92400E; --pYB: #FFFBEB; --pYD: #D97706; --pYBor: rgba(217,119,6,.2);
+  --pO: #9A3412; --pOB: #FFF4ED; --pOD: #EA580C; --pOBor: rgba(234,88,12,.2);
+  --pR: #B91C1C; --pRB: #FEF2F2; --pRD: #DC2626; --pRBor: rgba(220,38,38,.2);
+  --pK: #0F172A; --pKB: #F1F5F9; --pKD: #1E293B; --pKBor: rgba(30,41,59,.15);
+  --pI: #5B21B6; --pIB: #F5F3FF; --pID: #7C3AED; --pIBor: rgba(124,58,237,.2);
+}
+
+[data-theme="dark"] {
+  --pri: #3BC8AD; --priD: #2FB89E; --priL: #14352E; --priM: #1F5A4E;
+  --acc: #EE9573;
+  --w: #1B2532;
+  --g50: #121A24; --g100: #242F3D; --g200: #324051; --g300: #46566B;
+  --g400: #9FAFC0; --g500: #B4C1D0; --g600: #C9D4E0; --g700: #DEE6EF; --g800: #F2F6FA;
+  --ok: #34D399; --okL: #11291E; --warn: #FBBF24; --warnL: #2E2410;
+  --err: #F87171; --errL: #331A1C; --info: #60A5FA; --infoL: #16263D;
+  --sh0: 0 1px 2px rgba(0,0,0,0.4);
+  --sh1: 0 1px 4px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.35);
+  --sh2: 0 8px 30px rgba(0,0,0,0.6);
+  --pY: #FCD34D; --pYB: #2E2410; --pYD: #F59E0B; --pYBor: rgba(245,158,11,.35);
+  --pO: #FDBA74; --pOB: #321B0E; --pOD: #FB923C; --pOBor: rgba(251,146,60,.35);
+  --pR: #FCA5A5; --pRB: #331A1C; --pRD: #F87171; --pRBor: rgba(248,113,113,.35);
+  --pK: #E2E8F0; --pKB: #2A3442; --pKD: #94A3B8; --pKBor: rgba(148,163,184,.3);
+  --pI: #C4B5FD; --pIB: #221A38; --pID: #A78BFA; --pIBor: rgba(167,139,250,.35);
+}
+
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+
+body { margin: 0; }
+
+/* Visible focus for keyboard users without polluting mouse interaction */
+:focus-visible {
+  outline: 2px solid var(--pri);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@keyframes hr-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+@keyframes hr-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes hr-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes hr-pop-in {
+  from { opacity: 0; transform: scale(.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.hr-skeleton {
+  background: linear-gradient(90deg, var(--g100) 25%, var(--g200) 50%, var(--g100) 75%);
+  background-size: 200% 100%;
+  animation: hr-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hr-skeleton { animation: none; }
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

@@ -3,7 +3,9 @@ import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, Empty, BtnPri, BtnSec, Th, FG, inp } from "../components";
+import { Card, Empty, SkeletonRows, BtnPri, BtnSec, Th, FG, inp } from "../components";
+import { ConfirmModal } from "../modal";
+import { useToast } from "../toast";
 
 const EMPTY_FORM = { name: "", email: "", role: "hr_officer", department: "", password: "" };
 
@@ -17,9 +19,14 @@ export default function Users({ lang, user }) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [confirmUser, setConfirmUser] = useState(null);
+  const [deactivating, setDeactivating] = useState(false);
+  const toast = useToast();
 
   async function load() {
     try { setList(await api.listUsers()); } catch (e) { setErr(e.message); }
+    setLoading(false);
   }
   useEffect(() => { load(); }, []);
 
@@ -32,6 +39,7 @@ export default function Users({ lang, user }) {
       await api.createUser(form);
       setForm(EMPTY_FORM);
       setOpen(false);
+      toast("ok", t("savedOk"));
       await load();
     } catch (e) {
       setErr(e.message);
@@ -40,13 +48,17 @@ export default function Users({ lang, user }) {
     }
   }
 
-  async function deactivate(u) {
-    if (!confirm(`${t("deactivate")}: ${u.name}?`)) return;
+  async function deactivate() {
+    setDeactivating(true);
     try {
-      await api.deactivateUser(u.id);
+      await api.deactivateUser(confirmUser.id);
+      toast("ok", t("deactOk"));
+      setConfirmUser(null);
       await load();
-    } catch (e) {
-      setErr(e.message);
+    } catch {
+      toast("err", t("errGeneric"));
+    } finally {
+      setDeactivating(false);
     }
   }
 
@@ -63,7 +75,7 @@ export default function Users({ lang, user }) {
       {open && (
         <Card style={{ border: "2px solid rgba(47,184,158,.2)" }}>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("addUser")}</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 14, marginBottom: 16 }}>
             <FG label={t("name")}><input style={inp} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></FG>
             <FG label={t("email")}><input style={inp} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></FG>
             <FG label={t("role")}>
@@ -89,7 +101,9 @@ export default function Users({ lang, user }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead><tr>{[t("name"), t("email"), t("role"), t("dept"), t("status"), t("act")].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
             <tbody>
-              {list.length === 0 ? (
+              {loading ? (
+                <SkeletonRows rows={4} cols={6} />
+              ) : list.length === 0 ? (
                 <tr><td colSpan={6}><Empty text={t("noUsers")} /></td></tr>
               ) : list.map((u) => (
                 <tr key={u.id} style={{ borderBottom: `1px solid ${S.g100}`, opacity: u.is_active ? 1 : 0.5 }}>
@@ -100,7 +114,7 @@ export default function Users({ lang, user }) {
                   <td style={{ padding: "12px 16px", color: u.is_active ? S.ok : S.g400, fontWeight: 600 }}>{u.is_active ? t("active") : t("inactive")}</td>
                   <td style={{ padding: "12px 16px" }}>
                     {u.is_active && u.id !== user.id ? (
-                      <button onClick={() => deactivate(u)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("deactivate")}</button>
+                      <button onClick={() => setConfirmUser(u)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("deactivate")}</button>
                     ) : null}
                   </td>
                 </tr>
@@ -109,6 +123,17 @@ export default function Users({ lang, user }) {
           </table>
         </div>
       </Card>
+
+      <ConfirmModal
+        open={confirmUser !== null}
+        onClose={() => setConfirmUser(null)}
+        onConfirm={deactivate}
+        busy={deactivating}
+        title={t("confirmDeact")}
+        body={`${t("deactivate")}: ${confirmUser?.name} (${confirmUser?.email})`}
+        confirmLabel={t("deactivate")}
+        cancelLabel={t("cancel")}
+      />
     </div>
   );
 }

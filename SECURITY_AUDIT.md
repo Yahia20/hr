@@ -135,7 +135,7 @@ not tracked).
 ### F-21 — CSRF ✅ FIXED (Phase 2: SameSite=Lax cookies + double-submit token required on every mutation)
 - Auth is an `Authorization` header attached explicitly by JS, never auto-sent by the browser, so cross-site request forgery has no vector today. **When Phase 2 moves to httpOnly cookies, CSRF defenses (SameSite=Lax/Strict + token or double-submit) are mandatory** — flagged here so it cannot be forgotten.
 
-### F-22 — Fonts loaded from Google CDN at runtime ⏳ DEFERRED
+### F-22 — Fonts loaded from Google CDN at runtime ✅ FIXED (Phase 3: self-hosted via @fontsource-variable, bundled by Vite; no third-party requests)
 - **File:** `frontend/src/App.jsx:115`
 - **Risk:** Third-party runtime dependency leaks user IPs to Google, blocks a strict CSP, and breaks offline/intranet use. Recommend self-hosting the two font families (Phase 3, with the rest of the UI work).
 

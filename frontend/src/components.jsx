@@ -16,13 +16,61 @@ export const Card = ({ children, style: cs, flush }) => (
   <div style={{ background: S.w, borderRadius: S.r3, border: `1px solid ${S.g200}`, padding: flush ? 0 : 24, boxShadow: S.sh1, overflow: flush ? "hidden" : "visible", ...cs }}>{children}</div>
 );
 
-export const Empty = ({ icon, text, sub }) => (
+export const Empty = ({ icon, text, sub, action }) => (
   <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "56px 0", color: S.g400, gap: 10 }}>
-    {icon}
+    {icon || (
+      <div aria-hidden="true" style={{ width: 52, height: 52, borderRadius: "50%", background: S.g100, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22 }}>📋</div>
+    )}
     <p style={{ fontSize: 14, fontWeight: 500, margin: 0 }}>{text}</p>
-    {sub && <small style={{ fontSize: 12.5, color: S.g300 }}>{sub}</small>}
+    {sub && <small style={{ fontSize: 12.5, color: S.g400 }}>{sub}</small>}
+    {action && <div style={{ marginTop: 6 }}>{action}</div>}
   </div>
 );
+
+export const Skeleton = ({ w = "100%", h = 14, style: ss }) => (
+  <span aria-hidden="true" className="hr-skeleton" style={{ display: "block", width: w, height: h, ...ss }} />
+);
+
+/** Shimmer placeholder rows for a table while data loads. */
+export const SkeletonRows = ({ rows = 5, cols = 5 }) => (
+  <>
+    {Array.from({ length: rows }).map((_, r) => (
+      <tr key={r} style={{ borderBottom: `1px solid ${S.g100}` }}>
+        {Array.from({ length: cols }).map((__, c) => (
+          <td key={c} style={{ padding: "14px 16px" }}><Skeleton w={c === 0 ? "70%" : "55%"} /></td>
+        ))}
+      </tr>
+    ))}
+  </>
+);
+
+export const KpiSkeleton = () => (
+  <Card>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Skeleton w={42} h={42} style={{ borderRadius: S.r2 }} />
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <Skeleton w="45%" h={30} />
+        <Skeleton w="65%" h={11} />
+      </div>
+    </div>
+  </Card>
+);
+
+/** Client-side pagination footer: « prev | x–y of n | next » */
+export const Pager = ({ page, pages, from, to, total, setPage, ar, label }) => {
+  if (total === 0) return null;
+  const btn = (disabled) => ({ width: 30, height: 30, borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: disabled ? S.g300 : S.g500, cursor: disabled ? "default" : "pointer", fontSize: 13, fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center" });
+  return (
+    <nav aria-label={label || "Pagination"} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderTop: `1px solid ${S.g100}` }}>
+      <span style={{ fontSize: 12, color: S.g400 }}>{from}–{to} / {total}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => setPage(page - 1)} disabled={page <= 1} aria-label="Previous page" style={btn(page <= 1)}>{ar ? "›" : "‹"}</button>
+        <span style={{ fontSize: 12, color: S.g500, minWidth: 44, textAlign: "center" }}>{page} / {pages}</span>
+        <button onClick={() => setPage(page + 1)} disabled={page >= pages} aria-label="Next page" style={btn(page >= pages)}>{ar ? "‹" : "›"}</button>
+      </div>
+    </nav>
+  );
+};
 
 export const KpiCard = ({ icon, iconBg, value, label, sub }) => (
   <Card>
@@ -50,7 +98,7 @@ export const BtnGhost = ({ children, onClick }) => (
 );
 
 export const Th = ({ children, ar }) => (
-  <th style={{ padding: "11px 16px", fontWeight: 600, color: S.g400, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", borderBottom: `2px solid ${S.g100}`, whiteSpace: "nowrap", textAlign: ar ? "right" : "left", background: S.g50 }}>{children}</th>
+  <th scope="col" style={{ padding: "11px 16px", fontWeight: 600, color: S.g400, fontSize: 10.5, textTransform: "uppercase", letterSpacing: ".06em", borderBottom: `2px solid ${S.g100}`, whiteSpace: "nowrap", textAlign: ar ? "right" : "left", background: S.g50 }}>{children}</th>
 );
 
 export const FG = ({ label, children }) => (

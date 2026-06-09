@@ -3,13 +3,16 @@ import { api } from "../api";
 import { S, pbStyle } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, Empty, KpiCard, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
+import { Card, Empty, KpiCard, KpiSkeleton, SkeletonRows, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
+import { useToast } from "../toast";
 
 export default function Dashboard({ lang, user, onNewV, onViewAll }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const toast = useToast();
+  const loading = !data && !err;
 
   useEffect(() => {
     api.dashboard().then(setData).catch((e) => setErr(e.message));
@@ -31,20 +34,26 @@ export default function Dashboard({ lang, user, onNewV, onViewAll }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <BtnPri onClick={onNewV}>{IC.plus} <span>{t("newV")}</span></BtnPri>
-          <BtnSec>{IC.dl} <span>{t("export")}</span></BtnSec>
+          <BtnSec onClick={() => api.exportViolations({}).then(() => toast("ok", t("exportOk"))).catch(() => toast("err", t("errGeneric")))}>{IC.dl} <span>{t("export")}</span></BtnSec>
         </div>
       </div>
 
       {err && <div style={{ color: S.err, fontSize: 13 }}>Error loading data: {err}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16 }}>
-        <KpiCard icon={IC.warn} iconBg="rgba(232,130,92,.1)" value={totals.violations} label={t("totV")} />
-        <KpiCard icon={IC.users} iconBg="rgba(47,184,158,.1)" value={totals.employees} label={t("totE")} />
-        <KpiCard icon={IC.clock} iconBg="rgba(217,119,6,.1)" value={totals.deduction_days} label={t("totD")} />
-        <KpiCard icon={IC.shieldR} iconBg="rgba(220,38,38,.1)" value={totals.active_freezes} label={t("actF")} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 16 }}>
+        {loading ? (
+          <><KpiSkeleton /><KpiSkeleton /><KpiSkeleton /><KpiSkeleton /></>
+        ) : (
+          <>
+            <KpiCard icon={IC.warn} iconBg="rgba(232,130,92,.1)" value={totals.violations} label={t("totV")} />
+            <KpiCard icon={IC.users} iconBg="rgba(47,184,158,.1)" value={totals.employees} label={t("totE")} />
+            <KpiCard icon={IC.clock} iconBg="rgba(217,119,6,.1)" value={totals.deduction_days} label={t("totD")} />
+            <KpiCard icon={IC.shieldR} iconBg="rgba(220,38,38,.1)" value={totals.active_freezes} label={t("actF")} />
+          </>
+        )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 20 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 18 }}>{t("trend")}</h3>
           {data?.monthly?.length ? (
@@ -85,7 +94,7 @@ export default function Dashboard({ lang, user, onNewV, onViewAll }) {
         </Card>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 20 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("penDist")}</h3>
           {["Yellow", "Orange", "Red", "Black", "Investigation"].map((lv) => {
@@ -112,8 +121,10 @@ export default function Dashboard({ lang, user, onNewV, onViewAll }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead><tr>{[t("employee"), t("inc"), t("pen"), t("ded"), t("date")].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
               <tbody>
-                {recent.length === 0 ? (
-                  <tr><td colSpan={5}><Empty text={t("noViol")} /></td></tr>
+                {loading ? (
+                  <SkeletonRows rows={5} cols={5} />
+                ) : recent.length === 0 ? (
+                  <tr><td colSpan={5}><Empty text={t("noViol")} sub={t("firstViolHint")} action={<BtnPri onClick={onNewV}>{IC.plus} <span>{t("newV")}</span></BtnPri>} /></td></tr>
                 ) : recent.map((v) => (
                   <tr key={v.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
                     <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{v.employee_name}</td>

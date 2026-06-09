@@ -3,8 +3,10 @@ import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, BtnPri, BtnSec, PenBadge, FG, inp } from "../components";
+import { Card, BtnPri, BtnSec, PenBadge, FG, inp, Skeleton } from "../components";
 import { GUIDE } from "../tokens";
+import { useToast } from "../toast";
+import { useMediaQuery } from "../hooks";
 
 export default function LogViolation({ lang, user }) {
   const ar = lang === "ar";
@@ -23,6 +25,8 @@ export default function LogViolation({ lang, user }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [proof, setProof] = useState({ name: "", dataUrl: "" });
+  const toast = useToast();
+  const narrow = useMediaQuery("(max-width: 980px)");
 
   function onProofChange(e) {
     const file = e.target.files?.[0];
@@ -73,17 +77,35 @@ export default function LogViolation({ lang, user }) {
         proof_image: proofB64,
       };
       const v = await api.createViolation(payload);
+      toast("ok", `${t("vLogged")}: ${v.penalty_color} \u2014 ${v.deduction_days} ${t("days")}`);
       setMsg({ type: "ok", text: `${v.penalty_color} \u2014 ${v.deduction_days} ${t("days")}` });
       setComment(""); setForce(false); setOverride(-1);
       setProof({ name: "", dataUrl: "" });
     } catch (e) {
+      toast("err", e.message || t("errGeneric"));
       setMsg({ type: "err", text: e.message });
     } finally {
       setSaving(false);
     }
   }
 
-  if (!matrix) return <div style={{ color: S.g400, fontSize: 13 }}>Loading\u2026</div>;
+  if (!matrix) {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 340px", gap: 22 }}>
+        <Card>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <Skeleton w="40%" h={11} />
+                <Skeleton h={40} style={{ borderRadius: 10 }} />
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card><Skeleton w="60%" h={14} style={{ marginBottom: 14 }} /><Skeleton h={90} /></Card>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -97,7 +119,7 @@ export default function LogViolation({ lang, user }) {
 
       {guideOpen && (
         <Card style={{ background: S.priL, borderColor: S.priM }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10 }}>
             {GUIDE.map((g) => (
               <div key={g.lv} style={{ background: S.w, borderRadius: S.r2, padding: "14px 10px", textAlign: "center", border: `1px solid ${S.g200}` }}>
                 <div style={{ fontSize: 26, marginBottom: 8 }}>{g.ic}</div>
@@ -110,9 +132,9 @@ export default function LogViolation({ lang, user }) {
         </Card>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 340px", gap: 22 }}>
         <Card>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 20, marginBottom: 20 }}>
             <FG label={t("vCat")}>
               <select style={{ ...inp, cursor: "pointer" }} value={cat} onChange={(e) => setCat(e.target.value)}>
                 {Object.keys(matrix.matrix).map((c) => <option key={c} value={c}>{c}</option>)}
@@ -124,7 +146,7 @@ export default function LogViolation({ lang, user }) {
               </select>
             </FG>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 20, marginBottom: 20 }}>
             <FG label={`${t("employee")} *`}>
               <select style={{ ...inp, cursor: "pointer" }} value={emp} onChange={(e) => setEmp(e.target.value)}>
                 <option value="">{ar ? "\u2014 \u0627\u062E\u062A\u0631 \u2014" : "\u2014 select \u2014"}</option>
@@ -140,7 +162,7 @@ export default function LogViolation({ lang, user }) {
               <textarea style={{ ...inp, resize: "vertical", minHeight: 88 }} value={comment} onChange={(e) => setComment(e.target.value)} />
             </FG>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 20, marginBottom: 20 }}>
             <FG label={t("proof")}>
               <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: S.r2, border: `1.5px dashed ${S.g300}`, cursor: "pointer", background: S.g50, fontSize: 13, color: S.g500 }}>
                 {IC.upload}

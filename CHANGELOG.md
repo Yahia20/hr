@@ -1,5 +1,50 @@
 # Changelog
 
+## Phase 3 — UX Improvements (2026-06-09)
+
+All frontend; verified in a real browser (login → dashboard → dark mode → shortcuts →
+Arabic RTL → mobile viewport) with zero console errors.
+
+- **Dark mode** (`src/theme.css`, `src/tokens.js`): every color now resolves through CSS
+  variables; toggling sets `data-theme` on `<html>` and persists in `localStorage`.
+  Penalty badges, charts, skeletons, and modals all have tuned dark variants.
+- **Loading skeletons** (`Skeleton`, `SkeletonRows`, `KpiSkeleton` in
+  `src/components.jsx`): shimmer placeholders replace text spinners on Dashboard,
+  Reports, Employees, Users, and the Log Violation form; respects
+  `prefers-reduced-motion`.
+- **Toast notifications** (`src/toast.jsx`): success/error/warning/info toasts with
+  `aria-live`, auto-dismiss, manual close; wired to every create/delete/export action.
+- **Confirmation modals** (`src/modal.jsx`): accessible dialog (focus trap, Esc, focus
+  restore, `aria-modal`) replaces `window.confirm` for deleting violations/employees and
+  deactivating users.
+- **Debounced search** (`useDebouncedValue` in `src/hooks.js`): 300 ms debounce on the
+  Employees search and a new free-text search on Reports (employee, incident, category,
+  comment, submitted-by); `/` focuses the search box.
+- **Pagination** (`usePagination` + `Pager`): Reports history and Employees tables page
+  at 10 rows with an accessible pager. (Virtualization deferred — see changelog notes.)
+- **PDF export** (`src/pdf.js`): print-window export with brand header, filter summary,
+  and totals — chosen over a JS PDF lib because the browser shapes Arabic/RTL text
+  correctly with no font embedding. Excel export now reports success/failure via toast;
+  the Dashboard's previously dead Export button is wired up.
+- **Keyboard shortcuts** (`useHotkeys`): `d/n/e/r` navigate (role-aware), `/` focuses
+  search, `?` opens a shortcuts help modal, Esc closes overlays; suppressed while typing.
+- **Mobile responsiveness**: sidebar becomes a hamburger-triggered overlay drawer below
+  820 px; all fixed multi-column grids converted to `auto-fit/minmax`; topbar condenses.
+- **Accessibility**: WCAG AA contrast fix for secondary text (`--g400` darkened),
+  `:focus-visible` outlines, `scope="col"` on table headers, `aria-label`s on all
+  icon-only buttons, `aria-current` on nav, `role="alert"`/`role="status"` on
+  messages, labeled search inputs.
+- **Self-hosted fonts** (closes audit F-22): DM Sans + Noto Sans Arabic bundled via
+  `@fontsource-variable`; the Google Fonts runtime `<link>` is gone.
+- **Persisted preferences**: language and theme survive reloads (`localStorage`).
+
+### Removed
+- The decorative (non-functional) notification-bell button in the topbar.
+
+### Deferred
+- List virtualization — pagination covers current data volumes; revisit if tables
+  exceed a few thousand rows.
+
 ## Phase 2 — Authentication Module (2026-06-09)
 
 Replaces the single shared HTTP Basic credential with per-user accounts, server-side

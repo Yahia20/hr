@@ -47,7 +47,7 @@ function PasswordInput({ value, onChange, label, t, autoComplete }) {
 
 function Shell({ ar, t, title, sub, children }) {
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: S.g50, padding: 20, direction: ar ? "rtl" : "ltr", fontFamily: ar ? "'Noto Sans Arabic','Segoe UI',sans-serif" : "'DM Sans','Segoe UI',sans-serif" }}>
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: S.g50, padding: 20, direction: ar ? "rtl" : "ltr", fontFamily: ar ? S.fontAr : S.fontEn }}>
       <div style={{ width: "100%", maxWidth: 380, background: S.w, borderRadius: S.r3, border: `1px solid ${S.g200}`, padding: 32, boxShadow: S.sh1 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginBottom: 24 }}>
           <div style={{ width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg,${S.pri},${S.priD})`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 18, fontWeight: 800, boxShadow: "0 4px 14px rgba(47,184,158,.35)" }}>TG</div>
