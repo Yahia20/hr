@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import PropTypes from "prop-types";
 import { S } from "./tokens";
 import { BtnSec } from "./components";
 
@@ -80,3 +81,21 @@ export function ConfirmModal({ open, onClose, onConfirm, title, body, confirmLab
     </Modal>
   );
 }
+
+Modal.propTypes = {
+  open: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired,
+  title: PropTypes.string,
+  children: PropTypes.node,
+  labelledBy: PropTypes.string,
+};
+ConfirmModal.propTypes = {
+  open: PropTypes.bool.isRequired,
+  onClose: PropTypes.func.isRequired,
+  onConfirm: PropTypes.func.isRequired,
+  title: PropTypes.string,
+  body: PropTypes.node,
+  confirmLabel: PropTypes.string,
+  cancelLabel: PropTypes.string,
+  busy: PropTypes.bool,
+};

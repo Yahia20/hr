@@ -6,7 +6,7 @@ import { IC } from "../icons";
 import { Card, Empty, SkeletonRows, Pager, BtnPri, BtnSec, Th, FG, inp } from "../components";
 import { ConfirmModal } from "../modal";
 import { useToast } from "../toast";
-import { useDebouncedValue, usePagination } from "../hooks";
+import { useDebouncedValue, useFocusSearch, usePagination } from "../hooks";
 
 export default function Employees({ lang, user }) {
   const ar = lang === "ar";
@@ -25,6 +25,7 @@ export default function Employees({ lang, user }) {
   const [deleting, setDeleting] = useState(false);
   const toast = useToast();
   const searchRef = useRef(null);
+  useFocusSearch(searchRef);
   const dq = useDebouncedValue(search, 300);
 
   async function load() {
@@ -33,11 +34,6 @@ export default function Employees({ lang, user }) {
   }
   useEffect(() => { load(); }, []);
 
-  useEffect(() => {
-    const h = () => searchRef.current?.focus();
-    window.addEventListener("hr-focus-search", h);
-    return () => window.removeEventListener("hr-focus-search", h);
-  }, []);
 
   async function save() {
     if (!form.name.trim() || !form.email.trim()) return;

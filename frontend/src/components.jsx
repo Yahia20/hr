@@ -1,7 +1,10 @@
+import { memo } from "react";
+import PropTypes from "prop-types";
 import { S, pbStyle } from "./tokens";
 import { L } from "./i18n";
 
-export function PenBadge({ level, size = "sm", lang }) {
+// memo: rendered once per table row; props are primitives.
+export const PenBadge = memo(function PenBadge({ level, size = "sm", lang }) {
   const s = pbStyle[level] || pbStyle.Yellow;
   const lk = { Yellow: "yellow", Orange: "orange", Red: "red", Black: "black", Investigation: "invest" };
   return (
@@ -10,7 +13,13 @@ export function PenBadge({ level, size = "sm", lang }) {
       {L[lang][lk[level]] || level}
     </span>
   );
-}
+});
+
+PenBadge.propTypes = {
+  level: PropTypes.oneOf(["Yellow", "Orange", "Red", "Black", "Investigation"]).isRequired,
+  size: PropTypes.oneOf(["sm", "lg"]),
+  lang: PropTypes.string.isRequired,
+};
 
 export const Card = ({ children, style: cs, flush }) => (
   <div style={{ background: S.w, borderRadius: S.r3, border: `1px solid ${S.g200}`, padding: flush ? 0 : 24, boxShadow: S.sh1, overflow: flush ? "hidden" : "visible", ...cs }}>{children}</div>
@@ -72,7 +81,8 @@ export const Pager = ({ page, pages, from, to, total, setPage, ar, label }) => {
   );
 };
 
-export const KpiCard = ({ icon, iconBg, value, label, sub }) => (
+export const KpiCard = memo(function KpiCard({ icon, iconBg, value, label, sub }) {
+  return (
   <Card>
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ width: 42, height: 42, borderRadius: S.r2, display: "flex", alignItems: "center", justifyContent: "center", background: iconBg }}>{icon}</div>
@@ -83,7 +93,16 @@ export const KpiCard = ({ icon, iconBg, value, label, sub }) => (
       {sub && <div style={{ fontSize: 11.5, color: S.g400, borderTop: `1px solid ${S.g100}`, paddingTop: 12 }}>{sub}</div>}
     </div>
   </Card>
-);
+  );
+});
+
+KpiCard.propTypes = {
+  icon: PropTypes.node,
+  iconBg: PropTypes.string,
+  value: PropTypes.oneOfType([PropTypes.number, PropTypes.string]),
+  label: PropTypes.string,
+  sub: PropTypes.node,
+};
 
 export const BtnPri = ({ children, onClick, wide, disabled }) => (
   <button onClick={onClick} disabled={disabled} style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: wide ? 12 : "9px 18px", borderRadius: S.r2, border: "none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.6 : 1, fontSize: wide ? 14 : 13, fontWeight: 600, transition: S.tr, fontFamily: "inherit", whiteSpace: "nowrap", background: S.pri, color: "#fff", boxShadow: "0 2px 8px rgba(47,184,158,.25)", width: wide ? "100%" : "auto", justifyContent: "center" }}>{children}</button>
@@ -109,3 +128,23 @@ export const FG = ({ label, children }) => (
 );
 
 export const inp = { padding: "10px 14px", borderRadius: S.r2, border: `1.5px solid ${S.g200}`, fontSize: 13.5, color: S.g700, fontFamily: "inherit", outline: "none", background: S.w, width: "100%" };
+
+Card.propTypes = { children: PropTypes.node, style: PropTypes.object, flush: PropTypes.bool };
+Empty.propTypes = { icon: PropTypes.node, text: PropTypes.string, sub: PropTypes.string, action: PropTypes.node };
+Skeleton.propTypes = { w: PropTypes.oneOfType([PropTypes.number, PropTypes.string]), h: PropTypes.oneOfType([PropTypes.number, PropTypes.string]), style: PropTypes.object };
+SkeletonRows.propTypes = { rows: PropTypes.number, cols: PropTypes.number };
+Pager.propTypes = {
+  page: PropTypes.number.isRequired,
+  pages: PropTypes.number.isRequired,
+  from: PropTypes.number.isRequired,
+  to: PropTypes.number.isRequired,
+  total: PropTypes.number.isRequired,
+  setPage: PropTypes.func.isRequired,
+  ar: PropTypes.bool,
+  label: PropTypes.string,
+};
+BtnPri.propTypes = { children: PropTypes.node, onClick: PropTypes.func, wide: PropTypes.bool, disabled: PropTypes.bool };
+BtnSec.propTypes = { children: PropTypes.node, onClick: PropTypes.func };
+BtnGhost.propTypes = { children: PropTypes.node, onClick: PropTypes.func };
+Th.propTypes = { children: PropTypes.node, ar: PropTypes.bool };
+FG.propTypes = { label: PropTypes.string, children: PropTypes.node };

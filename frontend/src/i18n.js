@@ -60,6 +60,8 @@ export const L = {
     scEmp: "Go to Employees", scSearch: "Focus search", scHelp: "Show this help",
     firstViolHint: "Logged violations will appear here",
     addEmpHint: "Use the Add Employee button above",
+    errBoundaryMsg: "This section failed to render. The error has been logged.",
+    retry: "Try again",
   },
   ar: {
     dash: "\u0644\u0648\u062D\u0629 \u0627\u0644\u062A\u062D\u0643\u0645", log: "\u062A\u0633\u062C\u064A\u0644 \u0645\u062E\u0627\u0644\u0641\u0629",

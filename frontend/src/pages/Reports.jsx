@@ -5,11 +5,11 @@ import { L } from "../i18n";
 import { IC } from "../icons";
 import { Card, Empty, KpiCard, KpiSkeleton, SkeletonRows, Pager, BtnPri, BtnSec, Th, FG, PenBadge, inp } from "../components";
 import { ConfirmModal } from "../modal";
+import ViolationsTable from "./ViolationsTable";
+import { BarList, PenaltyDist, PENALTY_LEVELS } from "../charts";
 import { useToast } from "../toast";
-import { useDebouncedValue, usePagination } from "../hooks";
+import { useDebouncedValue, useFocusSearch, usePagination } from "../hooks";
 import { exportViolationsPdf } from "../pdf";
-
-const PENALTIES = ["Yellow", "Orange", "Red", "Black", "Investigation"];
 
 export default function Reports({ lang, user }) {
   const ar = lang === "ar";
@@ -29,13 +29,7 @@ export default function Reports({ lang, user }) {
   const [deleting, setDeleting] = useState(false);
   const toast = useToast();
   const searchRef = useRef(null);
-
-  // "/" hotkey focuses this page's search box
-  useEffect(() => {
-    const h = () => searchRef.current?.focus();
-    window.addEventListener("hr-focus-search", h);
-    return () => window.removeEventListener("hr-focus-search", h);
-  }, []);
+  useFocusSearch(searchRef);
 
   async function load() {
     setLoading(true); setErr(null);
@@ -150,7 +144,7 @@ export default function Reports({ lang, user }) {
             <FG label={t("penLvl")}>
               <select style={{ ...inp, cursor: "pointer" }} value={filters.penalty} onChange={(e) => setFilters({ ...filters, penalty: e.target.value })}>
                 <option value="">{t("all")}</option>
-                {PENALTIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                {PENALTY_LEVELS.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </FG>
           </div>
@@ -175,80 +169,20 @@ export default function Reports({ lang, user }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 20 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("penDist")}</h3>
-          {rows.length === 0 ? <Empty text={t("noData")} /> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {PENALTIES.map((lv) => {
-                const count = byColor[lv] || 0;
-                const pct = rows.length ? (count / rows.length) * 100 : 0;
-                return (
-                  <div key={lv} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <PenBadge level={lv} lang={lang} />
-                    <div style={{ flex: 1, height: 8, background: S.g100, borderRadius: 999, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: S.pri, borderRadius: 999 }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: S.g700, minWidth: 28, textAlign: ar ? "left" : "right" }}>{count}</span>
-                  </div>
-                );
-              })}
-            </div>
+          {searched.length === 0 ? <Empty text={t("noData")} /> : (
+            <PenaltyDist byColor={byColor} total={searched.length} lang={lang} ar={ar} />
           )}
         </Card>
 
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("topInc")}</h3>
           {topInc.length === 0 ? <Empty text={t("noData")} /> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {topInc.map(([name, n]) => {
-                const max = topInc[0][1] || 1;
-                return (
-                  <div key={name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 12, color: S.g600, minWidth: 150 }}>{name}</span>
-                    <div style={{ flex: 1, height: 8, background: S.g100, borderRadius: 999, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${(n / max) * 100}%`, background: S.acc, borderRadius: 999 }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: S.g700 }}>{n}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <BarList items={topInc} color={S.acc} ar={ar} />
           )}
         </Card>
       </div>
 
-      <Card flush>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: `1px solid ${S.g100}` }}>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, margin: 0 }}>{t("vHist")}</h3>
-          <span style={{ fontSize: 12, color: S.g400 }}>{searched.length} {t("totV")}</span>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr>{[t("employee"), t("cat"), t("inc"), t("pen"), t("ded"), t("subBy"), t("date"), ...(canDelete ? [t("act")] : [])].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
-            <tbody>
-              {loading ? (
-                <SkeletonRows rows={6} cols={canDelete ? 8 : 7} />
-              ) : searched.length === 0 ? (
-                <tr><td colSpan={canDelete ? 8 : 7}><Empty text={t("noViol")} sub={t("firstViolHint")} /></td></tr>
-              ) : pg.slice.map((r) => (
-                <tr key={r.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
-                  <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{r.employee_name}</td>
-                  <td style={{ padding: "12px 16px", color: S.g600 }}>{r.category}</td>
-                  <td style={{ padding: "12px 16px", color: S.g600 }}>{r.incident}</td>
-                  <td style={{ padding: "12px 16px" }}><PenBadge level={r.penalty_color} lang={lang} /></td>
-                  <td style={{ padding: "12px 16px", color: S.g700, fontWeight: 600 }}>{r.deduction_days} {t("days")}</td>
-                  <td style={{ padding: "12px 16px", color: S.g600 }}>{r.submitted_by}</td>
-                  <td style={{ padding: "12px 16px", color: S.g500, fontSize: 12 }}>{r.created_at?.slice(0, 16)}</td>
-                  {canDelete && (
-                    <td style={{ padding: "12px 16px" }}>
-                      <button onClick={() => setConfirmId(r.id)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {!loading && <Pager {...pg} ar={ar} label={t("vHist")} />}
-      </Card>
+      <ViolationsTable pg={pg} loading={loading} total={searched.length} canDelete={canDelete} onDelete={setConfirmId} ar={ar} lang={lang} t={t} />
 
       <ConfirmModal
         open={confirmId !== null}

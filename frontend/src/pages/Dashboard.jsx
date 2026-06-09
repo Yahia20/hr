@@ -5,6 +5,7 @@ import { L } from "../i18n";
 import { IC } from "../icons";
 import { Card, Empty, KpiCard, KpiSkeleton, SkeletonRows, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
 import { useToast } from "../toast";
+import { BarList, PenaltyDist } from "../charts";
 
 export default function Dashboard({ lang, user, onNewV, onViewAll }) {
   const ar = lang === "ar";
@@ -76,20 +77,7 @@ export default function Dashboard({ lang, user, onNewV, onViewAll }) {
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 18 }}>{t("byCat")}</h3>
           {Object.keys(data?.by_category || {}).length ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {Object.entries(data.by_category).map(([cat, c]) => {
-                const max = Math.max(...Object.values(data.by_category), 1);
-                return (
-                  <div key={cat} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 12, color: S.g600, minWidth: 140 }}>{cat}</span>
-                    <div style={{ flex: 1, height: 8, background: S.g100, borderRadius: 999, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${(c / max) * 100}%`, background: S.pri, borderRadius: 999 }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: S.g700 }}>{c}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <BarList items={Object.entries(data.by_category)} ar={ar} labelWidth={140} />
           ) : <Empty text={t("noData")} />}
         </Card>
       </div>
@@ -97,19 +85,7 @@ export default function Dashboard({ lang, user, onNewV, onViewAll }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 20 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("penDist")}</h3>
-          {["Yellow", "Orange", "Red", "Black", "Investigation"].map((lv) => {
-            const count = byColor[lv] || 0;
-            const pct = (count / totalByColor) * 100;
-            return (
-              <div key={lv} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}>
-                <PenBadge level={lv} lang={lang} />
-                <div style={{ flex: 1, height: 6, background: S.g100, borderRadius: S.rF, overflow: "hidden" }}>
-                  <div style={{ height: "100%", borderRadius: S.rF, width: `${pct}%`, background: pbStyle[lv].dot }} />
-                </div>
-                <span style={{ fontSize: 13, fontWeight: 700, color: S.g700, minWidth: 24, textAlign: ar ? "left" : "right" }}>{count}</span>
-              </div>
-            );
-          })}
+          <PenaltyDist byColor={byColor} total={totalByColor} lang={lang} ar={ar} />
         </Card>
 
         <Card flush>

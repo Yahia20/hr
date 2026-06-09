@@ -78,3 +78,12 @@ export function usePagination(items, pageSize = 10) {
     to: Math.min(current * pageSize, items.length),
   };
 }
+
+/** Focus the given input ref when the global "/" shortcut fires. */
+export function useFocusSearch(ref) {
+  useEffect(() => {
+    const h = () => ref.current?.focus();
+    window.addEventListener("hr-focus-search", h);
+    return () => window.removeEventListener("hr-focus-search", h);
+  }, [ref]);
+}

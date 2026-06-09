@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useRef, useState } from "react";
+import PropTypes from "prop-types";
 import { S } from "./tokens";
 
 const ToastCtx = createContext(null);
@@ -55,3 +56,5 @@ export function ToastProvider({ children, ar }) {
 export function useToast() {
   return useContext(ToastCtx) || (() => {});
 }
+
+ToastProvider.propTypes = { children: PropTypes.node, ar: PropTypes.bool };

@@ -1,5 +1,59 @@
 # Changelog
 
+## Phase 4 — Code Quality (2026-06-09)
+
+- **Branding**: official Travel Gate logo wired into the sidebar, login screen, and
+  favicon (`frontend/public/logo.png`, `src/assets/logo.png`); page title updated.
+- **Component splits — every source file is now ≤ 200 lines**:
+  - `src/layout.jsx` — `Sidebar` + `Topbar` extracted from `App.jsx` (251 → 178).
+  - `src/charts.jsx` — shared `BarList` + `PenaltyDist`, deduplicating near-identical
+    chart code that existed in both Dashboard and Reports.
+  - `src/authui.jsx` — `PasswordInput`, `AuthShell`, `AuthAlert` out of `Login.jsx` (201 → 141).
+  - `src/pages/ViolationsTable.jsx` + `src/pages/EscalationAside.jsx` — out of
+    Reports (265 → 199) and LogViolation (225 → 200).
+- **Custom hooks**: `useFocusSearch` consolidates the duplicated "/"-shortcut listener
+  (joins Phase 3's `useDebouncedValue`, `usePagination`, `useHotkeys`, `useMediaQuery`,
+  `useLocalStorage`).
+- **PropTypes** added to every shared component (`prop-types` dependency): buttons,
+  Card/Empty/Skeleton/Pager/PenBadge/KpiCard, Modal/ConfirmModal, ToastProvider,
+  layout, charts, and the extracted page components.
+- **Error boundaries**: new `ErrorBoundary` class at the app root (`main.jsx`) and
+  around each page (keyed by page id so navigating away resets a tripped boundary);
+  bilingual fallback UI with a retry button.
+- **Performance**: `React.memo` on `PenBadge` (rendered per table row), `KpiCard`,
+  `BarList`, `PenaltyDist`, `Sidebar`, `Topbar`; `App.jsx` handlers wrapped in
+  `useCallback` so the memoized layout actually skips re-renders; heavy list
+  computations were already `useMemo`-ized in Phase 3.
+- **Bug found & fixed during refactor QA**: `Reports.jsx` referenced the removed
+  `PENALTIES` constant in the distribution chart — would have crashed the Reports page
+  at runtime.
+
+### Final QA (all phases)
+67 automated checks, all passing:
+- 21 backend business-logic checks (escalation sequence Y→Y→O→R→B→I, penalty preview,
+  force-investigation, deduction override + bounds, proof-image roundtrip + base64
+  validation, filters + date validation, Excel export, dashboard aggregates, employee
+  upsert, CSRF-guarded deletes, cookie flags).
+- 31 auth/RBAC checks (login/logout/me, lockout, CSRF, all four roles' permission
+  matrix, department/self scoping, forgot/reset incl. single-use tokens and session
+  revocation).
+- 15 browser E2E checks via headless Chromium (manager: add employee → log violation →
+  search → delete via confirm modal → create user → PDF export popup → logout;
+  officer: no Users nav, no delete buttons, can export; invalid-login error;
+  forgot-password generic message) — **zero console or page errors**.
+
+## Next steps & remaining items
+1. **Deploy**: set `HR_BOOTSTRAP_ADMIN_EMAIL/_PASSWORD`, `COOKIE_SECURE=true`,
+   `CORS_ORIGINS`, `APP_BASE_URL`, and `SMTP_*` on Railway; mount a persistent volume
+   for `HR_DB_FILE`.
+2. **Rotate the historically committed Gmail app password** (audit F-18) — still pending.
+3. **Delete the legacy `production/` tree and root `main.py`** (audit F-17) — awaiting approval.
+4. Move proof images out of the DB into file/object storage (known issue).
+5. Implement or remove the Settings page stub.
+6. Optional 2FA (email or TOTP) on top of the Phase 2 auth module.
+7. Self-service password change for logged-in users.
+8. List virtualization if violation history grows past a few thousand rows.
+
 ## Phase 3 — UX Improvements (2026-06-09)
 
 All frontend; verified in a real browser (login → dashboard → dark mode → shortcuts →
