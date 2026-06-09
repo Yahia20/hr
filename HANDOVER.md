@@ -1,7 +1,7 @@
 # HR Disciplinary System — Local Setup, Test, Performance & Deployment Report
 
 **Prepared:** 2026-06-06
-**Scope:** Make the app run locally (Fly.io trial ended), test all features, optimize performance, assess production readiness, and recommend a hosting target for 50–100 users.
+**Scope:** Make the app run locally (the previous hosted deployment is offline), test all features, optimize performance, assess production readiness, and recommend a hosting target for 50–100 users.
 
 ---
 
@@ -116,7 +116,7 @@ All API features were exercised against the running backend (direct and through 
 | Escalation / filter queries | full table scan | indexed | scales with row count |
 | Frontend bundle (gzip) | 58 KB | 58 KB (already small) | n/a |
 
-The Fly.io "slow loading / slow data fetch / delayed UI" symptoms were almost entirely this: **every Reports/Dashboard load shipped multi-MB of base64 image data** (and Reports re-fetches on every filter change). That payload now fits in a couple of kilobytes.
+The hosted "slow loading / slow data fetch / delayed UI" symptoms were almost entirely this: **every Reports/Dashboard load shipped multi-MB of base64 image data** (and Reports re-fetches on every filter change). That payload now fits in a couple of kilobytes.
 
 ### Optimizations implemented (code)
 - **`backend/app/routers/violations.py`** — list query now selects explicit columns **excluding `proof_image`** and returns a `has_proof` boolean; added **`GET /api/violations/{id}/proof`** to fetch a single image on demand.
@@ -174,34 +174,64 @@ Keep the simple 2-tier (React static + FastAPI) shape. For production, **migrate
 
 ---
 
-## F. Deployment Recommendation (ranked)
+## F. Deployment on Railway
 
-Goal: cheapest reliable host for a small internal app, easy to maintain, room to grow. Costs are approximate monthly USD as of 2026.
+The deployment target is **Railway** (https://railway.com). This section covers how to host the two services, how to handle proof photos, and which pricing plan to pick.
 
-### Ranked
+### Service layout
 
-| # | Option | Est. /mo | Best for | Notes |
-|---|--------|----------|----------|-------|
-| **1 (Recommended)** | **Render** (Web Service + Static Site + free/cheap Postgres) | **$0–14** | Lowest ops effort | Free static frontend; web service from ~$7; managed Postgres ~$7. Auto-TLS, auto-deploy from GitHub, logs/metrics built in. No server to patch. |
-| 2 | **Railway** | **~$5–15** (usage) | Fast setup, great DX | Usage-based; deploys Docker/Nixpacks; managed Postgres add-on; auto-TLS. Slightly less predictable cost. |
-| 3 | **Fly.io (paid)** | **~$5–15** | Staying on current platform | You already have `fly.toml`. Smallest `shared-cpu-1x` + a volume; add Fly Postgres. Re-uses existing config. |
-| 4 | **Hetzner CPX11 VPS + Coolify** | **~$5 (€4.5)** | Lowest raw cost, full control | 2 vCPU / 2 GB. Install Coolify for Heroku-like deploys. You own patching/backups. Best price/perf if you want a server. |
-| 5 | **Oracle Cloud Free Tier** | **$0** | Zero budget | Generous always-free ARM VM (up to 4 vCPU/24 GB). Free forever but capacity/onboarding can be fiddly; you self-manage everything. |
-| 6 | DigitalOcean App Platform / Lightsail | ~$5–12 | Familiar ecosystem | Solid, slightly pricier than Hetzner; managed-ish. |
-| — | Contabo / Hostinger VPS | ~$5–7 | Cheap VPS alt to Hetzner | Cheap; mixed reliability reputation vs Hetzner. |
+Run the app as one Railway **project** with two services deployed from the GitHub repo:
 
-### Final recommendation
-- **Want least maintenance (recommended):** **Render** — frontend as a free Static Site, backend as a small Web Service, and **managed PostgreSQL**. Auto-HTTPS, auto-deploy on push, built-in logs. Total ≈ **$7–14/mo** (or near-$0 to start on free tiers).
-- **Want lowest cost / full control:** **Hetzner CPX11 (~€4.5/mo) + Coolify**, Postgres in a container, nightly volume snapshots.
-- **Want to keep Fly.io:** re-enable the existing `fly.toml`, smallest paid instance + Fly Postgres (~$5–15/mo).
+| Service | Source | Build | Runtime |
+|---------|--------|-------|---------|
+| **backend** | `backend/` | Dockerfile or Nixpacks (Python) | `uvicorn app.main:app --host 0.0.0.0 --port $PORT` |
+| **frontend** | `frontend/` | `npm run build` | serve static `dist/` |
 
-### Deployment steps (Render — recommended)
-1. **Backend prep:** remove unused `psycopg2-binary`/`asyncpg` *or* (for Postgres) add a real Postgres driver and point `HR_DB_FILE`/`DATABASE_URL` at the managed DB. Add a `Dockerfile` or use Render's Python runtime with `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-2. **Create Web Service** from the GitHub repo, root `backend/`; set env vars `HR_ADMIN_USERNAME`, `HR_ADMIN_PASSWORD` (strong), and DB URL as **secrets**.
-3. **Create PostgreSQL** instance; migrate the SQLite data (small).
-4. **Create Static Site** from `frontend/`; build `npm run build`, publish `dist/`. Set the API base / proxy to the backend URL (replace the dev `/api`→localhost proxy with the real backend origin, and add that origin to backend CORS).
-5. **Lock CORS** to the Static Site URL; verify HTTPS, login, and a full log-violation flow.
-6. **Add Sentry + log drain** (optional, free) for monitoring.
+Railway provides automatic HTTPS and a public domain per service, and redeploys on every push. Set `HR_ADMIN_USERNAME` and `HR_ADMIN_PASSWORD` (a strong value — not `admin123`) as service **variables/secrets**, and lock backend `CORS_ORIGINS` to the frontend's Railway domain.
+
+> SQLite serializes writes and a Railway volume attaches to **one** service instance, so keep the backend at a **single replica** (do not enable horizontal scaling on it). That is plenty for 50–100 users (see § E).
+
+### Persisting the database
+
+Railway containers have an **ephemeral filesystem** — anything not on a mounted volume is wiped on every redeploy/restart. So:
+
+1. Add a **Volume** to the backend service (e.g. mounted at `/data`).
+2. Set `HR_DB_FILE=/data/hr_system.db` so the SQLite file lives on the volume and survives deploys.
+
+Without this, the database resets on each deploy. This is the single most important step.
+
+### Handling proof photos
+
+Proof images are currently stored as **base64 inside the SQLite row** (`violations.proof_image`). That works on Railway as-is once the DB is on a volume, but it has real downsides here: it inflated the DB to ~9 MB for 7 rows, bloats backups, and — because Railway **bills egress** — re-serving image bytes on every report/dashboard load costs money. The list/dashboard payload fix (§ C) already stopped shipping those bytes in bulk; images are now fetched one-at-a-time via `GET /api/violations/{id}/proof`.
+
+Three options, in order of recommendation:
+
+1. **Move proofs to files on the Railway Volume (recommended).** Write each upload to `/data/proofs/<id>.<ext>` and store only the path in the DB. Keeps the DB tiny and fast to back up, survives redeploys, no extra service. Same single-replica caveat as the DB.
+2. **Move proofs to external object storage (Cloudflare R2 / S3).** Store a key in the DB and serve via short-lived signed URLs. Best for backups and egress, and decouples photos from the app instance; costs ~15–30 min of wiring plus a (free-tier) R2 bucket. Pick this if proof volume grows large.
+3. **Leave them in SQLite.** Zero work, already functioning. Acceptable only while the proof count stays small; revisit before the DB grows past a few hundred MB.
+
+Either way, keep proof images **behind auth** (they are PII) — never expose a public bucket or unauthenticated path.
+
+### Pricing tiers — which to pick
+
+> Railway is **usage-metered** (CPU, RAM, egress, volume storage) on top of a plan fee. The figures below are Railway's published plans **as of June 2026** and change over time — confirm on https://railway.com/pricing before committing.
+
+| Plan | Fee | Included usage | Notes |
+|------|-----|----------------|-------|
+| **Trial** | $0 | one-time credit | For evaluation only; not for a real deployment. |
+| **Hobby** | **$5/mo** | **$5 of usage included** | Persistent volumes, custom domains, auto-TLS. Sufficient for this app's traffic. |
+| **Pro** | $20/mo per seat | $20 of usage included | Higher resource limits, team features, priority support. Not needed at this scale. |
+
+**Pick Hobby.** For a single-replica FastAPI backend + a static frontend at 50–100 internal users, expected usage sits at or near the $5 included credit, so the realistic bill is **~$5/mo** (a little more if proofs stay in the DB and drive egress — another reason to apply proof-storage option 1 or 2). Move to Pro only if you outgrow Hobby's resource caps or need team/seat features.
+
+### Deployment steps
+
+1. **Backend prep:** add a `Dockerfile` (or rely on Railway's Python/Nixpacks build). Remove the unused `psycopg2-binary`/`asyncpg` from `requirements.txt` (the code is SQLite-only — see § D) so builds stay lean.
+2. **Create the backend service** from the GitHub repo with root `backend/`; set `HR_ADMIN_USERNAME`, `HR_ADMIN_PASSWORD`, and `CORS_ORIGINS` as variables.
+3. **Add a Volume** to the backend, mount at `/data`, and set `HR_DB_FILE=/data/hr_system.db`. Apply a proof-photo option above.
+4. **Create the frontend service** from `frontend/`: build `npm run build`, serve `dist/`. Point its API base at the backend's Railway URL (replace the dev `/api`→localhost proxy) and add that origin to backend CORS.
+5. **Verify** HTTPS, login, a full log-violation flow, and that data survives a redeploy.
+6. *(Optional)* Add Sentry (free tier) for error tracking.
 
 ---
 
