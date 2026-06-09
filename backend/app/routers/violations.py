@@ -1,10 +1,26 @@
 import io
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _check_date(value: Optional[str], name: str) -> None:
+    if value and not _DATE_RE.match(value):
+        raise HTTPException(400, f"{name} must be formatted YYYY-MM-DD")
+
+
+def _xlsx_safe(value):
+    """Neutralise Excel formula injection: a cell starting with =, +, -, @ or a
+    control char would otherwise be evaluated as a formula when opened."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 from ..db import db
 from ..penalties import MATRIX_DATA, PENALTY_MAP
@@ -41,6 +57,8 @@ def list_violations(
     incident: Optional[str] = None,
     penalty: Optional[str] = None,
 ):
+    _check_date(date_from, "date_from")
+    _check_date(date_to, "date_to")
     clauses = ["1=1"]
     params: list = []
     if employee:
@@ -59,10 +77,27 @@ def list_violations(
         clauses.append("penalty_color = ?")
         params.append(penalty)
 
-    sql = f"SELECT * FROM violations WHERE {' AND '.join(clauses)} ORDER BY created_at DESC"
+    # Select every column EXCEPT the heavy base64 proof_image; expose a boolean
+    # flag instead so the grid stays small (a single image can be ~600 KB).
+    sql = (
+        "SELECT id, employee_name, category, incident, penalty_color, penalty_label, "
+        "deduction_hours, deduction_days, freeze_months, comment, submitted_by, "
+        "created_at, (proof_image != '') AS has_proof "
+        f"FROM violations WHERE {' AND '.join(clauses)} ORDER BY created_at DESC"
+    )
     with db() as conn:
         rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        return [{**dict(r), "has_proof": bool(r["has_proof"])} for r in rows]
+
+
+@router.get("/{vid}/proof")
+def get_proof(vid: int):
+    """Fetch a single violation's proof image (base64) on demand."""
+    with db() as conn:
+        row = conn.execute("SELECT proof_image FROM violations WHERE id = ?", (vid,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Violation not found")
+    return {"id": vid, "proof_image": row["proof_image"] or ""}
 
 
 @router.post("", response_model=Violation, status_code=201)
@@ -102,7 +137,9 @@ def create_violation(payload: ViolationIn):
                 now,
             ),
         )
-        return dict(cur.fetchone())
+        row = dict(cur.fetchone())
+    row["has_proof"] = bool(row.pop("proof_image", ""))
+    return row
 
 
 @router.delete("/{vid}", status_code=204)
@@ -140,10 +177,10 @@ def export_violations(
     ws.append(headers)
     for r in rows:
         ws.append([
-            r["id"], r["employee_name"], r["category"], r["incident"],
-            r["penalty_color"], r["penalty_label"],
+            r["id"], _xlsx_safe(r["employee_name"]), _xlsx_safe(r["category"]), _xlsx_safe(r["incident"]),
+            r["penalty_color"], _xlsx_safe(r["penalty_label"]),
             r["deduction_hours"], r["deduction_days"], r["freeze_months"],
-            r["comment"], r["submitted_by"], r["created_at"],
+            _xlsx_safe(r["comment"]), _xlsx_safe(r["submitted_by"]), r["created_at"],
         ])
     buf = io.BytesIO()
     wb.save(buf)

@@ -1,7 +1,12 @@
+import logging
+import sqlite3
+
 from fastapi import APIRouter, HTTPException
 
 from ..db import db
 from ..schemas import Employee, EmployeeIn
+
+logger = logging.getLogger("hr.employees")
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 
@@ -29,8 +34,10 @@ def create_employee(payload: EmployeeIn):
             )
             row = cur.fetchone()
             return dict(row)
-        except Exception as e:
-            raise HTTPException(400, str(e))
+        except sqlite3.Error:
+            # don't echo raw sqlite errors (schema/file details) to the client
+            logger.exception("Failed to save employee %r", payload.name)
+            raise HTTPException(400, "Could not save employee")
 
 
 @router.delete("/{name}", status_code=204)

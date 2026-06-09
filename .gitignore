@@ -9,3 +9,11 @@ venv/
 node_modules/
 dist/
 .vite/
+
+# local toolchain (portable node) & local env
+.tools/
+.env
+*.local
+hr system-handoff.zip
+.hr-handoff-extract/
+cdp_e2e.py

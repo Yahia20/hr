@@ -43,7 +43,11 @@ def dashboard():
 
         recent = [
             dict(row) for row in conn.execute(
-                "SELECT * FROM violations ORDER BY created_at DESC LIMIT 5"
+                """SELECT id, employee_name, category, incident, penalty_color,
+                          penalty_label, deduction_hours, deduction_days,
+                          freeze_months, comment, submitted_by, created_at,
+                          (proof_image != '') AS has_proof
+                   FROM violations ORDER BY created_at DESC LIMIT 5"""
             ).fetchall()
         ]
 
