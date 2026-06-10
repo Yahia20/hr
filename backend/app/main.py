@@ -2,11 +2,12 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from .auth import auth_is_configured, require_admin
+from .auth import bootstrap_admin
 from .db import init_db
+from .routers import auth as auth_router
 from .routers import employees, matrix, stats, violations
 
 logger = logging.getLogger("hr")
@@ -15,11 +16,7 @@ logger = logging.getLogger("hr")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
-    if not auth_is_configured():
-        logger.error(
-            "HR_ADMIN_PASSWORD_HASH / HR_ADMIN_PASSWORD is missing or insecure; "
-            "all authenticated requests will be rejected until it is set."
-        )
+    bootstrap_admin()
     yield
 
 
@@ -33,7 +30,7 @@ app.add_middleware(
     allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
 )
 
 
@@ -56,13 +53,10 @@ def health():
     return {"ok": True}
 
 
-@app.get("/api/auth/check")
-def auth_check(user: str = Depends(require_admin)):
-    return {"user": user}
-
-
-_protected = [Depends(require_admin)]
-app.include_router(employees.router, prefix="/api", dependencies=_protected)
-app.include_router(violations.router, prefix="/api", dependencies=_protected)
-app.include_router(stats.router, prefix="/api", dependencies=_protected)
-app.include_router(matrix.router, prefix="/api", dependencies=_protected)
+# Auth (login/logout/reset) is the only open router; every other router
+# declares its own role requirements per endpoint (see routers/*.py).
+app.include_router(auth_router.router, prefix="/api")
+app.include_router(employees.router, prefix="/api")
+app.include_router(violations.router, prefix="/api")
+app.include_router(stats.router, prefix="/api")
+app.include_router(matrix.router, prefix="/api")

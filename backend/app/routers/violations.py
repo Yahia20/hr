@@ -3,9 +3,19 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
+
+from ..auth import (
+    ROLE_DEPT_HEAD,
+    ROLE_EMPLOYEE,
+    ROLE_HR_MANAGER,
+    ROLE_HR_OFFICER,
+    CurrentUser,
+    require_role,
+    require_user,
+)
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -27,6 +37,18 @@ from ..penalties import MATRIX_DATA, PENALTY_MAP
 from ..schemas import Violation, ViolationIn
 
 router = APIRouter(prefix="/violations", tags=["violations"])
+
+_hr_staff = require_role(ROLE_HR_MANAGER, ROLE_HR_OFFICER)
+
+
+def _scope_clause(user: CurrentUser) -> tuple[str, list]:
+    """Horizontal access control: department heads only see their own
+    department's violations; employees only see their own record."""
+    if user.role == ROLE_DEPT_HEAD:
+        return "employee_name IN (SELECT name FROM employees WHERE department = ?)", [user.department]
+    if user.role == ROLE_EMPLOYEE:
+        return "employee_name IN (SELECT name FROM employees WHERE email = ?)", [user.email]
+    return "", []
 
 
 def _next_penalty(emp_name: str, category: str, incident: str) -> str:
@@ -56,11 +78,16 @@ def list_violations(
     date_to: Optional[str] = None,
     incident: Optional[str] = None,
     penalty: Optional[str] = None,
+    user: CurrentUser = Depends(require_user),
 ):
     _check_date(date_from, "date_from")
     _check_date(date_to, "date_to")
     clauses = ["1=1"]
     params: list = []
+    scope_sql, scope_params = _scope_clause(user)
+    if scope_sql:
+        clauses.append(scope_sql)
+        params.extend(scope_params)
     if employee:
         clauses.append("employee_name = ?")
         params.append(employee)
@@ -91,7 +118,7 @@ def list_violations(
 
 
 @router.get("/{vid}/proof")
-def get_proof(vid: int):
+def get_proof(vid: int, _: CurrentUser = Depends(_hr_staff)):
     """Fetch a single violation's proof image (base64) on demand."""
     with db() as conn:
         row = conn.execute("SELECT proof_image FROM violations WHERE id = ?", (vid,)).fetchone()
@@ -101,7 +128,7 @@ def get_proof(vid: int):
 
 
 @router.post("", response_model=Violation, status_code=201)
-def create_violation(payload: ViolationIn):
+def create_violation(payload: ViolationIn, user: CurrentUser = Depends(_hr_staff)):
     if payload.category not in MATRIX_DATA or payload.incident not in MATRIX_DATA[payload.category]:
         raise HTTPException(400, "Unknown category or incident")
 
@@ -133,7 +160,7 @@ def create_violation(payload: ViolationIn):
                 payload.employee_name, payload.category, payload.incident,
                 color, label,
                 p["deduction_hours"], applied, p["freeze_months"],
-                payload.comment, payload.submitted_by, payload.proof_image,
+                payload.comment, user.name, payload.proof_image,
                 now,
             ),
         )
@@ -143,13 +170,18 @@ def create_violation(payload: ViolationIn):
 
 
 @router.delete("/{vid}", status_code=204)
-def delete_violation(vid: int):
+def delete_violation(vid: int, _: CurrentUser = Depends(require_role(ROLE_HR_MANAGER))):
     with db() as conn:
         conn.execute("DELETE FROM violations WHERE id = ?", (vid,))
 
 
 @router.get("/preview")
-def preview_next(employee_name: str = Query(...), category: str = Query(...), incident: str = Query(...)):
+def preview_next(
+    employee_name: str = Query(...),
+    category: str = Query(...),
+    incident: str = Query(...),
+    _: CurrentUser = Depends(_hr_staff),
+):
     if category not in MATRIX_DATA or incident not in MATRIX_DATA[category]:
         raise HTTPException(400, "Unknown category or incident")
     color = _next_penalty(employee_name, category, incident)
@@ -164,8 +196,9 @@ def export_violations(
     date_to: Optional[str] = None,
     incident: Optional[str] = None,
     penalty: Optional[str] = None,
+    user: CurrentUser = Depends(_hr_staff),
 ):
-    rows = list_violations(employee, date_from, date_to, incident, penalty)
+    rows = list_violations(employee, date_from, date_to, incident, penalty, user)
     wb = Workbook()
     ws = wb.active
     ws.title = "Violations"

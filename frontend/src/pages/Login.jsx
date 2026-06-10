@@ -3,48 +3,139 @@ import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { BtnPri, FG, inp } from "../components";
+import { AuthAlert as Alert, AuthShell as Shell, PasswordInput } from "../authui";
 
-export default function Login({ lang, onSuccess }) {
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export default function Login({ lang, onSuccess, resetToken, onResetDone }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
 
-  const [user, setUser] = useState("");
+  // mode: "login" | "forgot" | "reset" (reset is forced by a token in the URL)
+  const [mode, setMode] = useState(resetToken ? "reset" : "login");
+  const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
+  const [pass2, setPass2] = useState("");
+  const [remember, setRemember] = useState(false);
   const [err, setErr] = useState(null);
+  const [okMsg, setOkMsg] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  async function submit(e) {
+  function fail(ex) {
+    if (ex.status === 401) setErr(t("errInvalidLogin"));
+    else if (ex.status === 429) setErr(t("errLocked"));
+    else if (ex.status === 400) setErr(mode === "reset" ? t("errResetInvalid") : ex.message);
+    else if (ex.status === 422) setErr(t("emailInvalid"));
+    else setErr(t("errNetwork"));
+  }
+
+  async function submitLogin(e) {
     e.preventDefault();
-    setBusy(true); setErr(null);
+    setErr(null); setOkMsg(null);
+    if (!EMAIL_RE.test(email)) { setErr(t("emailInvalid")); return; }
+    setBusy(true);
     try {
-      await api.login(user, pass);
-      onSuccess();
+      const { user } = await api.login(email.trim(), pass, remember);
+      onSuccess(user);
     } catch (ex) {
-      setErr(ar ? "\u0628\u064A\u0627\u0646\u0627\u062A \u063A\u064A\u0631 \u0635\u062D\u064A\u062D\u0629" : "Invalid credentials");
+      fail(ex);
     } finally {
       setBusy(false);
     }
   }
 
+  async function submitForgot(e) {
+    e.preventDefault();
+    setErr(null); setOkMsg(null);
+    if (!EMAIL_RE.test(email)) { setErr(t("emailInvalid")); return; }
+    setBusy(true);
+    try {
+      await api.forgotPassword(email.trim());
+      setOkMsg(t("resetSent"));
+    } catch (ex) {
+      fail(ex);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitReset(e) {
+    e.preventDefault();
+    setErr(null); setOkMsg(null);
+    if (pass.length < 8) { setErr(t("pwdTooShort")); return; }
+    if (pass !== pass2) { setErr(t("pwdMismatch")); return; }
+    setBusy(true);
+    try {
+      await api.resetPassword(resetToken, pass);
+      setOkMsg(t("resetDone"));
+      setTimeout(() => onResetDone(), 1500);
+    } catch (ex) {
+      fail(ex);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const linkStyle = { border: "none", background: "transparent", color: S.pri, fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", padding: 0 };
+
+  if (mode === "reset") {
+    return (
+      <Shell ar={ar} t={t} title={t("resetPwd")} sub={t("hrSys")}>
+        <form onSubmit={submitReset}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
+            <PasswordInput value={pass} onChange={(e) => setPass(e.target.value)} label={t("newPwd")} t={t} autoComplete="new-password" />
+            <PasswordInput value={pass2} onChange={(e) => setPass2(e.target.value)} label={t("confirmPwd")} t={t} autoComplete="new-password" />
+          </div>
+          {err && <Alert type="err">{err}</Alert>}
+          {okMsg && <Alert type="ok">{okMsg}</Alert>}
+          <BtnPri wide disabled={busy}><span>{busy ? t("loading") : t("resetPwd")}</span></BtnPri>
+          <div style={{ textAlign: "center", marginTop: 14 }}>
+            <button type="button" style={linkStyle} onClick={onResetDone}>{t("backToLogin")}</button>
+          </div>
+        </form>
+      </Shell>
+    );
+  }
+
+  if (mode === "forgot") {
+    return (
+      <Shell ar={ar} t={t} title={t("resetPwd")} sub={t("hrSys")}>
+        <form onSubmit={submitForgot}>
+          <div style={{ marginBottom: 18 }}>
+            <FG label={t("email")}>
+              <input style={inp} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" autoFocus required />
+            </FG>
+          </div>
+          {err && <Alert type="err">{err}</Alert>}
+          {okMsg && <Alert type="ok">{okMsg}</Alert>}
+          <BtnPri wide disabled={busy}><span>{busy ? t("loading") : t("sendResetLink")}</span></BtnPri>
+          <div style={{ textAlign: "center", marginTop: 14 }}>
+            <button type="button" style={linkStyle} onClick={() => { setMode("login"); setErr(null); setOkMsg(null); }}>{t("backToLogin")}</button>
+          </div>
+        </form>
+      </Shell>
+    );
+  }
+
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: S.g50, padding: 20, direction: ar ? "rtl" : "ltr", fontFamily: ar ? "'Noto Sans Arabic','Segoe UI',sans-serif" : "'DM Sans','Segoe UI',sans-serif" }}>
-      <form onSubmit={submit} style={{ width: "100%", maxWidth: 380, background: S.w, borderRadius: S.r3, border: `1px solid ${S.g200}`, padding: 32, boxShadow: S.sh1 }}>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginBottom: 24 }}>
-          <div style={{ width: 56, height: 56, borderRadius: 14, background: `linear-gradient(135deg,${S.pri},${S.priD})`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 18, fontWeight: 800, boxShadow: "0 4px 14px rgba(47,184,158,.35)" }}>TG</div>
-          <h1 style={{ fontSize: 18, fontWeight: 800, color: S.g800, margin: 0 }}>{t("hrSys")}</h1>
-          <p style={{ fontSize: 12, color: S.g400, margin: 0 }}>{ar ? "\u0633\u062C\u0644 \u0627\u0644\u062F\u062E\u0648\u0644 \u0644\u0644\u0645\u062A\u0627\u0628\u0639\u0629" : "Sign in to continue"}</p>
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
-          <FG label={ar ? "\u0627\u0633\u0645 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645" : "Username"}>
-            <input style={inp} value={user} onChange={(e) => setUser(e.target.value)} autoComplete="username" autoFocus />
+    <Shell ar={ar} t={t} sub={t("signInSub")}>
+      <form onSubmit={submitLogin}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 14 }}>
+          <FG label={t("email")}>
+            <input style={inp} type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" autoFocus required />
           </FG>
-          <FG label={ar ? "\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631" : "Password"}>
-            <input style={inp} type="password" value={pass} onChange={(e) => setPass(e.target.value)} autoComplete="current-password" />
-          </FG>
+          <PasswordInput value={pass} onChange={(e) => setPass(e.target.value)} label={t("password")} t={t} autoComplete="current-password" />
         </div>
-        {err && <div style={{ color: S.err, fontSize: 13, marginBottom: 14, textAlign: "center" }}>{err}</div>}
-        <BtnPri wide disabled={busy}><span>{busy ? "\u2026" : (ar ? "\u062F\u062E\u0648\u0644" : "Sign in")}</span></BtnPri>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: S.g500, cursor: "pointer" }}>
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} style={{ accentColor: S.pri, width: 14, height: 14, cursor: "pointer" }} />
+            {t("rememberMe")}
+          </label>
+          <button type="button" style={linkStyle} onClick={() => { setMode("forgot"); setErr(null); setOkMsg(null); }}>{t("forgotPwd")}</button>
+        </div>
+        {err && <Alert type="err">{err}</Alert>}
+        <BtnPri wide disabled={busy}><span>{busy ? t("loading") : t("signIn")}</span></BtnPri>
       </form>
-    </div>
+    </Shell>
   );
 }

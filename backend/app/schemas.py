@@ -36,7 +36,8 @@ class ViolationIn(BaseModel):
     employee_name: str = Field(..., min_length=1, max_length=120)
     category: str = Field(..., min_length=1, max_length=120)
     incident: str = Field(..., min_length=1, max_length=120)
-    submitted_by: str = Field(..., min_length=1, max_length=120)
+    # Ignored: submitted_by is derived server-side from the session user.
+    submitted_by: str = Field("", max_length=120)
     comment: str = Field("", max_length=2000)
     proof_image: str = Field("", max_length=MAX_PROOF_B64_CHARS)
     force_investigation: bool = False
@@ -52,6 +53,38 @@ class ViolationIn(BaseModel):
         except (binascii.Error, ValueError):
             raise ValueError("proof_image must be valid base64")
         return v
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=200)
+    remember_me: bool = False
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(..., min_length=20, max_length=200)
+    new_password: str = Field(..., min_length=8, max_length=200)
+
+
+class UserIn(BaseModel):
+    email: EmailStr
+    name: str = Field(..., min_length=1, max_length=120)
+    role: str = Field(..., pattern="^(hr_manager|hr_officer|dept_head|employee)$")
+    department: str = Field("", max_length=120)
+    password: str = Field(..., min_length=8, max_length=200)
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    name: str
+    role: str
+    department: str
+    is_active: int = 1
 
 
 class Violation(BaseModel):

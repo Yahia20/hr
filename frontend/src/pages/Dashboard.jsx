@@ -3,13 +3,17 @@ import { api } from "../api";
 import { S, pbStyle } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, Empty, KpiCard, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
+import { Card, Empty, KpiCard, KpiSkeleton, SkeletonRows, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
+import { useToast } from "../toast";
+import { BarList, PenaltyDist } from "../charts";
 
-export default function Dashboard({ lang, onNewV, onViewAll }) {
+export default function Dashboard({ lang, user, onNewV, onViewAll }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const toast = useToast();
+  const loading = !data && !err;
 
   useEffect(() => {
     api.dashboard().then(setData).catch((e) => setErr(e.message));
@@ -25,26 +29,32 @@ export default function Dashboard({ lang, onNewV, onViewAll }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 22, fontWeight: 800, color: S.g800, letterSpacing: "-.4px", margin: 0 }}>
-            {t("welcome")}, {ar ? "\u0623\u0645\u064A\u0646" : "Amin"} {"\u{1F44B}"}
+            {t("welcome")}, {user?.name} {"\u{1F44B}"}
           </h2>
           <p style={{ fontSize: 13, color: S.g400, marginTop: 2 }}>{t("todayAct")}</p>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <BtnPri onClick={onNewV}>{IC.plus} <span>{t("newV")}</span></BtnPri>
-          <BtnSec>{IC.dl} <span>{t("export")}</span></BtnSec>
+          <BtnSec onClick={() => api.exportViolations({}).then(() => toast("ok", t("exportOk"))).catch(() => toast("err", t("errGeneric")))}>{IC.dl} <span>{t("export")}</span></BtnSec>
         </div>
       </div>
 
       {err && <div style={{ color: S.err, fontSize: 13 }}>Error loading data: {err}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16 }}>
-        <KpiCard icon={IC.warn} iconBg="rgba(232,130,92,.1)" value={totals.violations} label={t("totV")} />
-        <KpiCard icon={IC.users} iconBg="rgba(47,184,158,.1)" value={totals.employees} label={t("totE")} />
-        <KpiCard icon={IC.clock} iconBg="rgba(217,119,6,.1)" value={totals.deduction_days} label={t("totD")} />
-        <KpiCard icon={IC.shieldR} iconBg="rgba(220,38,38,.1)" value={totals.active_freezes} label={t("actF")} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 16 }}>
+        {loading ? (
+          <><KpiSkeleton /><KpiSkeleton /><KpiSkeleton /><KpiSkeleton /></>
+        ) : (
+          <>
+            <KpiCard icon={IC.warn} iconBg="rgba(232,130,92,.1)" value={totals.violations} label={t("totV")} />
+            <KpiCard icon={IC.users} iconBg="rgba(47,184,158,.1)" value={totals.employees} label={t("totE")} />
+            <KpiCard icon={IC.clock} iconBg="rgba(217,119,6,.1)" value={totals.deduction_days} label={t("totD")} />
+            <KpiCard icon={IC.shieldR} iconBg="rgba(220,38,38,.1)" value={totals.active_freezes} label={t("actF")} />
+          </>
+        )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 20 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 18 }}>{t("trend")}</h3>
           {data?.monthly?.length ? (
@@ -67,40 +77,15 @@ export default function Dashboard({ lang, onNewV, onViewAll }) {
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 18 }}>{t("byCat")}</h3>
           {Object.keys(data?.by_category || {}).length ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {Object.entries(data.by_category).map(([cat, c]) => {
-                const max = Math.max(...Object.values(data.by_category), 1);
-                return (
-                  <div key={cat} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 12, color: S.g600, minWidth: 140 }}>{cat}</span>
-                    <div style={{ flex: 1, height: 8, background: S.g100, borderRadius: 999, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${(c / max) * 100}%`, background: S.pri, borderRadius: 999 }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: S.g700 }}>{c}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <BarList items={Object.entries(data.by_category)} ar={ar} labelWidth={140} />
           ) : <Empty text={t("noData")} />}
         </Card>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 20 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("penDist")}</h3>
-          {["Yellow", "Orange", "Red", "Black", "Investigation"].map((lv) => {
-            const count = byColor[lv] || 0;
-            const pct = (count / totalByColor) * 100;
-            return (
-              <div key={lv} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}>
-                <PenBadge level={lv} lang={lang} />
-                <div style={{ flex: 1, height: 6, background: S.g100, borderRadius: S.rF, overflow: "hidden" }}>
-                  <div style={{ height: "100%", borderRadius: S.rF, width: `${pct}%`, background: pbStyle[lv].dot }} />
-                </div>
-                <span style={{ fontSize: 13, fontWeight: 700, color: S.g700, minWidth: 24, textAlign: ar ? "left" : "right" }}>{count}</span>
-              </div>
-            );
-          })}
+          <PenaltyDist byColor={byColor} total={totalByColor} lang={lang} ar={ar} />
         </Card>
 
         <Card flush>
@@ -112,8 +97,10 @@ export default function Dashboard({ lang, onNewV, onViewAll }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead><tr>{[t("employee"), t("inc"), t("pen"), t("ded"), t("date")].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
               <tbody>
-                {recent.length === 0 ? (
-                  <tr><td colSpan={5}><Empty text={t("noViol")} /></td></tr>
+                {loading ? (
+                  <SkeletonRows rows={5} cols={5} />
+                ) : recent.length === 0 ? (
+                  <tr><td colSpan={5}><Empty text={t("noViol")} sub={t("firstViolHint")} action={<BtnPri onClick={onNewV}>{IC.plus} <span>{t("newV")}</span></BtnPri>} /></td></tr>
                 ) : recent.map((v) => (
                   <tr key={v.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
                     <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{v.employee_name}</td>
