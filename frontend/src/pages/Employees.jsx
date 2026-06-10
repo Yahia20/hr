@@ -1,13 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, Empty, BtnPri, BtnSec, Th, FG, inp } from "../components";
+import { Card, Empty, SkeletonRows, Pager, BtnPri, BtnSec, Th, FG, inp } from "../components";
+import { ConfirmModal } from "../modal";
+import { useToast } from "../toast";
+import { useDebouncedValue, useFocusSearch, usePagination } from "../hooks";
 
-export default function Employees({ lang }) {
+export default function Employees({ lang, user }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
+  const isHR = user?.role === "hr_manager" || user?.role === "hr_officer";
+  const canDelete = user?.role === "hr_manager";
 
   const [list, setList] = useState([]);
   const [search, setSearch] = useState("");
@@ -15,11 +20,20 @@ export default function Employees({ lang }) {
   const [form, setForm] = useState({ name: "", email: "", department: "", manager_email: "" });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [confirmName, setConfirmName] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const toast = useToast();
+  const searchRef = useRef(null);
+  useFocusSearch(searchRef);
+  const dq = useDebouncedValue(search, 300);
 
   async function load() {
     try { setList(await api.listEmployees()); } catch (e) { setErr(e.message); }
+    setLoading(false);
   }
   useEffect(() => { load(); }, []);
+
 
   async function save() {
     if (!form.name.trim() || !form.email.trim()) return;
@@ -28,6 +42,7 @@ export default function Employees({ lang }) {
       await api.createEmployee(form);
       setForm({ name: "", email: "", department: "", manager_email: "" });
       setOpen(false);
+      toast("ok", t("savedOk"));
       await load();
     } catch (e) {
       setErr(e.message);
@@ -36,15 +51,24 @@ export default function Employees({ lang }) {
     }
   }
 
-  async function remove(name) {
-    if (!confirm(`${t("del")}: ${name}?`)) return;
-    await api.deleteEmployee(name);
-    await load();
+  async function remove() {
+    setDeleting(true);
+    try {
+      await api.deleteEmployee(confirmName);
+      toast("ok", t("delOk"));
+      setConfirmName(null);
+      await load();
+    } catch {
+      toast("err", t("errGeneric"));
+    } finally {
+      setDeleting(false);
+    }
   }
 
-  const filtered = list.filter((e) =>
-    [e.name, e.email, e.department].some((f) => (f || "").toLowerCase().includes(search.toLowerCase()))
-  );
+  const filtered = useMemo(() => list.filter((e) =>
+    [e.name, e.email, e.department].some((f) => (f || "").toLowerCase().includes(dq.toLowerCase()))
+  ), [list, dq]);
+  const pg = usePagination(filtered, 10);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -55,17 +79,17 @@ export default function Employees({ lang }) {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
-            <span style={{ position: "absolute", [ar ? "right" : "left"]: 12, pointerEvents: "none", display: "flex" }}>{IC.srch}</span>
-            <input style={{ ...inp, [ar ? "paddingRight" : "paddingLeft"]: 36, width: 210 }} placeholder={t("search")} value={search} onChange={(e) => setSearch(e.target.value)} />
+            <span style={{ position: "absolute", insetInlineStart: 12, pointerEvents: "none", display: "flex" }}>{IC.srch}</span>
+            <input ref={searchRef} style={{ ...inp, padding: "10px 14px 10px 14px", paddingInlineStart: 36, width: 210 }} placeholder={t("search")} value={search} onChange={(e) => setSearch(e.target.value)} aria-label={t("search")} />
           </div>
-          <BtnPri onClick={() => setOpen(!open)}>{IC.plus} <span>{t("addEmp")}</span></BtnPri>
+          {isHR && <BtnPri onClick={() => setOpen(!open)}>{IC.plus} <span>{t("addEmp")}</span></BtnPri>}
         </div>
       </div>
 
       {open && (
         <Card style={{ border: "2px solid rgba(47,184,158,.2)" }}>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("addEmp")}</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, marginBottom: 16 }}>
             <FG label={t("name")}><input style={inp} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></FG>
             <FG label={t("email")}><input style={inp} type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></FG>
             <FG label={t("dept")}><input style={inp} value={form.department} onChange={(e) => setForm({ ...form, department: e.target.value })} /></FG>
@@ -82,25 +106,41 @@ export default function Employees({ lang }) {
       <Card flush>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr>{[t("name"), t("email"), t("dept"), t("mgrEmail"), t("act")].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
+            <thead><tr>{[t("name"), t("email"), t("dept"), t("mgrEmail"), ...(canDelete ? [t("act")] : [])].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
             <tbody>
-              {filtered.length === 0 ? (
-                <tr><td colSpan={5}><Empty text={t("noEmp")} sub={ar ? "\u0627\u0633\u062A\u062E\u062F\u0645 \u0632\u0631 \u0627\u0644\u0625\u0636\u0627\u0641\u0629 \u0623\u0639\u0644\u0627\u0647" : "Use the Add Employee button above"} /></td></tr>
-              ) : filtered.map((e) => (
+              {loading ? (
+                <SkeletonRows rows={5} cols={canDelete ? 5 : 4} />
+              ) : filtered.length === 0 ? (
+                <tr><td colSpan={canDelete ? 5 : 4}><Empty text={t("noEmp")} sub={isHR ? t("addEmpHint") : undefined} /></td></tr>
+              ) : pg.slice.map((e) => (
                 <tr key={e.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
                   <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{e.name}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.email}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.department}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.manager_email}</td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <button onClick={() => remove(e.name)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
-                  </td>
+                  {canDelete && (
+                    <td style={{ padding: "12px 16px" }}>
+                      <button onClick={() => setConfirmName(e.name)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {!loading && <Pager {...pg} ar={ar} label={t("emp")} />}
       </Card>
+
+      <ConfirmModal
+        open={confirmName !== null}
+        onClose={() => setConfirmName(null)}
+        onConfirm={remove}
+        busy={deleting}
+        title={t("confirmDel")}
+        body={`${t("del")}: ${confirmName} — ${t("irreversible")}`}
+        confirmLabel={t("del")}
+        cancelLabel={t("cancel")}
+      />
     </div>
   );
 }

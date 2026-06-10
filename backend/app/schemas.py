@@ -1,12 +1,31 @@
+import base64
+import binascii
 from typing import Optional
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
+
+# 5 MB of raw image data, as base64 (4/3 expansion + padding slack).
+MAX_PROOF_B64_CHARS = 7_200_000
 
 
 class EmployeeIn(BaseModel):
-    name: str = Field(..., min_length=1)
-    email: str
-    department: str = ""
-    manager_email: str = ""
+    name: str = Field(..., min_length=1, max_length=120)
+    email: EmailStr
+    department: str = Field("", max_length=120)
+    manager_email: str = Field("", max_length=254)
+
+    @field_validator("name", "department")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("manager_email")
+    @classmethod
+    def _manager_email_valid(cls, v: str) -> str:
+        v = v.strip()
+        if v and ("@" not in v or " " in v):
+            raise ValueError("manager_email must be a valid email address")
+        return v
 
 
 class Employee(EmployeeIn):
@@ -14,14 +33,58 @@ class Employee(EmployeeIn):
 
 
 class ViolationIn(BaseModel):
-    employee_name: str
-    category: str
-    incident: str
-    submitted_by: str = Field(..., min_length=1)
-    comment: str = ""
-    proof_image: str = ""
+    employee_name: str = Field(..., min_length=1, max_length=120)
+    category: str = Field(..., min_length=1, max_length=120)
+    incident: str = Field(..., min_length=1, max_length=120)
+    # Ignored: submitted_by is derived server-side from the session user.
+    submitted_by: str = Field("", max_length=120)
+    comment: str = Field("", max_length=2000)
+    proof_image: str = Field("", max_length=MAX_PROOF_B64_CHARS)
     force_investigation: bool = False
-    override_days: Optional[float] = None
+    override_days: Optional[float] = Field(None, ge=0, le=365)
+
+    @field_validator("proof_image")
+    @classmethod
+    def _valid_base64(cls, v: str) -> str:
+        if not v:
+            return v
+        try:
+            base64.b64decode(v, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("proof_image must be valid base64")
+        return v
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=200)
+    remember_me: bool = False
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(..., min_length=20, max_length=200)
+    new_password: str = Field(..., min_length=8, max_length=200)
+
+
+class UserIn(BaseModel):
+    email: EmailStr
+    name: str = Field(..., min_length=1, max_length=120)
+    role: str = Field(..., pattern="^(hr_manager|hr_officer|dept_head|employee)$")
+    department: str = Field("", max_length=120)
+    password: str = Field(..., min_length=8, max_length=200)
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    name: str
+    role: str
+    department: str
+    is_active: int = 1
 
 
 class Violation(BaseModel):

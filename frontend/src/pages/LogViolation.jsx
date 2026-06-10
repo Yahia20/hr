@@ -3,10 +3,13 @@ import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, BtnPri, BtnSec, PenBadge, FG, inp } from "../components";
+import { Card, BtnPri, BtnSec, PenBadge, FG, inp, Skeleton } from "../components";
 import { GUIDE } from "../tokens";
+import { useToast } from "../toast";
+import EscalationAside from "./EscalationAside";
+import { useMediaQuery } from "../hooks";
 
-export default function LogViolation({ lang }) {
+export default function LogViolation({ lang, user }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
 
@@ -15,7 +18,6 @@ export default function LogViolation({ lang }) {
   const [cat, setCat] = useState("");
   const [inc, setInc] = useState("");
   const [emp, setEmp] = useState("");
-  const [rep, setRep] = useState("");
   const [comment, setComment] = useState("");
   const [force, setForce] = useState(false);
   const [override, setOverride] = useState(-1);
@@ -24,6 +26,8 @@ export default function LogViolation({ lang }) {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [proof, setProof] = useState({ name: "", dataUrl: "" });
+  const toast = useToast();
+  const narrow = useMediaQuery("(max-width: 980px)");
 
   function onProofChange(e) {
     const file = e.target.files?.[0];
@@ -63,30 +67,46 @@ export default function LogViolation({ lang }) {
 
   async function submit() {
     if (!emp) { setMsg({ type: "err", text: t("employee") + " *" }); return; }
-    if (!rep.trim()) { setMsg({ type: "err", text: t("hrRep") + " *" }); return; }
     setSaving(true);
     setMsg(null);
     try {
       const proofB64 = proof.dataUrl ? proof.dataUrl.split(",")[1] || "" : "";
       const payload = {
-        employee_name: emp, category: cat, incident: inc,
-        submitted_by: rep, comment,
+        employee_name: emp, category: cat, incident: inc, comment,
         force_investigation: force,
         override_days: override >= 0 ? Number(override) : null,
         proof_image: proofB64,
       };
       const v = await api.createViolation(payload);
+      toast("ok", `${t("vLogged")}: ${v.penalty_color} \u2014 ${v.deduction_days} ${t("days")}`);
       setMsg({ type: "ok", text: `${v.penalty_color} \u2014 ${v.deduction_days} ${t("days")}` });
       setComment(""); setForce(false); setOverride(-1);
       setProof({ name: "", dataUrl: "" });
     } catch (e) {
+      toast("err", e.message || t("errGeneric"));
       setMsg({ type: "err", text: e.message });
     } finally {
       setSaving(false);
     }
   }
 
-  if (!matrix) return <div style={{ color: S.g400, fontSize: 13 }}>Loading\u2026</div>;
+  if (!matrix) {
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 340px", gap: 22 }}>
+        <Card>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <Skeleton w="40%" h={11} />
+                <Skeleton h={40} style={{ borderRadius: 10 }} />
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card><Skeleton w="60%" h={14} style={{ marginBottom: 14 }} /><Skeleton h={90} /></Card>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -100,7 +120,7 @@ export default function LogViolation({ lang }) {
 
       {guideOpen && (
         <Card style={{ background: S.priL, borderColor: S.priM }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 10 }}>
             {GUIDE.map((g) => (
               <div key={g.lv} style={{ background: S.w, borderRadius: S.r2, padding: "14px 10px", textAlign: "center", border: `1px solid ${S.g200}` }}>
                 <div style={{ fontSize: 26, marginBottom: 8 }}>{g.ic}</div>
@@ -113,9 +133,9 @@ export default function LogViolation({ lang }) {
         </Card>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 22 }}>
+      <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 340px", gap: 22 }}>
         <Card>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 20, marginBottom: 20 }}>
             <FG label={t("vCat")}>
               <select style={{ ...inp, cursor: "pointer" }} value={cat} onChange={(e) => setCat(e.target.value)}>
                 {Object.keys(matrix.matrix).map((c) => <option key={c} value={c}>{c}</option>)}
@@ -127,15 +147,15 @@ export default function LogViolation({ lang }) {
               </select>
             </FG>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 20, marginBottom: 20 }}>
             <FG label={`${t("employee")} *`}>
               <select style={{ ...inp, cursor: "pointer" }} value={emp} onChange={(e) => setEmp(e.target.value)}>
                 <option value="">{ar ? "\u2014 \u0627\u062E\u062A\u0631 \u2014" : "\u2014 select \u2014"}</option>
                 {employees.map((e) => <option key={e.id} value={e.name}>{e.name}</option>)}
               </select>
             </FG>
-            <FG label={`${t("hrRep")} *`}>
-              <input style={inp} value={rep} onChange={(e) => setRep(e.target.value)} />
+            <FG label={t("hrRep")}>
+              <input style={{ ...inp, background: S.g50, color: S.g500 }} value={user?.name || ""} readOnly aria-readonly="true" />
             </FG>
           </div>
           <div style={{ marginBottom: 20 }}>
@@ -143,7 +163,7 @@ export default function LogViolation({ lang }) {
               <textarea style={{ ...inp, resize: "vertical", minHeight: 88 }} value={comment} onChange={(e) => setComment(e.target.value)} />
             </FG>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginBottom: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 20, marginBottom: 20 }}>
             <FG label={t("proof")}>
               <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: S.r2, border: `1.5px dashed ${S.g300}`, cursor: "pointer", background: S.g50, fontSize: 13, color: S.g500 }}>
                 {IC.upload}
@@ -173,33 +193,7 @@ export default function LogViolation({ lang }) {
           <BtnPri wide disabled={saving} onClick={submit}>{IC.check} <span>{saving ? "\u2026" : t("submit")}</span></BtnPri>
         </Card>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card style={{ background: S.infoL, borderColor: "rgba(37,99,235,.15)" }}>
-            <h4 style={{ fontSize: 13, fontWeight: 700, color: S.info, marginTop: 0, marginBottom: 12, display: "flex", alignItems: "center", gap: 7 }}>{IC.shield}<span>{t("escPath")}</span></h4>
-            {(meta?.escalation || []).map((step, i) => {
-              const isNext = preview && preview.penalty_color === step && !meta.escalation.slice(0, i).some((s) => s === step);
-              return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", opacity: isNext ? 1 : 0.75 }}>
-                  <span style={{ width: 22, height: 22, borderRadius: "50%", flexShrink: 0, background: S.w, border: `1.5px solid ${isNext ? S.info : S.g200}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: isNext ? S.info : S.g400 }}>{i + 1}</span>
-                  <PenBadge level={step} lang={lang} />
-                </div>
-              );
-            })}
-          </Card>
-          <Card>
-            <h4 style={{ fontSize: 13, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 12 }}>{t("details")}</h4>
-            {[
-              { label: t("reset"), value: `${meta?.reset || 30} ${t("days")}` },
-              { label: t("maxS"), value: meta?.escalation?.length || 0 },
-              { label: t("cat"), value: cat },
-            ].map((r, i, a) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: i < a.length - 1 ? `1px solid ${S.g100}` : "none" }}>
-                <span style={{ fontSize: 12, color: S.g400 }}>{r.label}</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: S.g700 }}>{r.value}</span>
-              </div>
-            ))}
-          </Card>
-        </div>
+        <EscalationAside meta={meta} preview={preview} cat={cat} lang={lang} t={t} />
       </div>
     </div>
   );

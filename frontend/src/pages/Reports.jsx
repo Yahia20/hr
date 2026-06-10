@@ -1,22 +1,35 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, Empty, KpiCard, BtnPri, BtnSec, Th, FG, PenBadge, inp } from "../components";
+import { Card, Empty, KpiCard, KpiSkeleton, SkeletonRows, Pager, BtnPri, BtnSec, Th, FG, PenBadge, inp } from "../components";
+import { ConfirmModal } from "../modal";
+import ViolationsTable from "./ViolationsTable";
+import { BarList, PenaltyDist, PENALTY_LEVELS } from "../charts";
+import { useToast } from "../toast";
+import { useDebouncedValue, useFocusSearch, usePagination } from "../hooks";
+import { exportViolationsPdf } from "../pdf";
 
-const PENALTIES = ["Yellow", "Orange", "Red", "Black", "Investigation"];
-
-export default function Reports({ lang }) {
+export default function Reports({ lang, user }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
+  const isHR = user?.role === "hr_manager" || user?.role === "hr_officer";
+  const canDelete = user?.role === "hr_manager";
 
   const [employees, setEmployees] = useState([]);
   const [rows, setRows] = useState([]);
   const [filters, setFilters] = useState({ employee: "", date_from: "", date_to: "", penalty: "" });
   const [filterOpen, setFilterOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [q, setQ] = useState("");
+  const dq = useDebouncedValue(q, 300);
+  const [confirmId, setConfirmId] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const toast = useToast();
+  const searchRef = useRef(null);
+  useFocusSearch(searchRef);
 
   async function load() {
     setLoading(true); setErr(null);
@@ -30,37 +43,69 @@ export default function Reports({ lang }) {
     }
   }
 
-  useEffect(() => { api.listEmployees().then(setEmployees).catch(() => {}); }, []);
+  useEffect(() => {
+    if (user?.role === "employee") return; // scoped server-side; no employee list access
+    api.listEmployees().then(setEmployees).catch(() => {});
+  }, []);
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [filters.employee, filters.date_from, filters.date_to, filters.penalty]);
 
-  async function remove(id) {
-    if (!confirm(`${t("del")} #${id}?`)) return;
-    await api.deleteViolation(id);
-    await load();
+  async function remove() {
+    setDeleting(true);
+    try {
+      await api.deleteViolation(confirmId);
+      toast("ok", t("delOk"));
+      setConfirmId(null);
+      await load();
+    } catch {
+      toast("err", t("errGeneric"));
+    } finally {
+      setDeleting(false);
+    }
   }
 
+  // client-side text search on top of the server-side filters
+  const searched = useMemo(() => {
+    const needle = dq.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((r) =>
+      [r.employee_name, r.incident, r.category, r.comment, r.submitted_by]
+        .some((f) => (f || "").toLowerCase().includes(needle))
+    );
+  }, [rows, dq]);
+
+  const pg = usePagination(searched, 10);
+
   const totals = useMemo(() => {
-    const ded = rows.reduce((s, r) => s + (r.deduction_days || 0), 0);
-    const freezes = rows.filter((r) => (r.freeze_months || 0) > 0).length;
-    const employeesSet = new Set(rows.map((r) => r.employee_name));
-    return { count: rows.length, ded, freezes, emp: employeesSet.size };
-  }, [rows]);
+    const ded = searched.reduce((s, r) => s + (r.deduction_days || 0), 0);
+    const freezes = searched.filter((r) => (r.freeze_months || 0) > 0).length;
+    const employeesSet = new Set(searched.map((r) => r.employee_name));
+    return { count: searched.length, ded, freezes, emp: employeesSet.size };
+  }, [searched]);
 
   const byColor = useMemo(() => {
     const m = {};
-    rows.forEach((r) => { m[r.penalty_color] = (m[r.penalty_color] || 0) + 1; });
+    searched.forEach((r) => { m[r.penalty_color] = (m[r.penalty_color] || 0) + 1; });
     return m;
-  }, [rows]);
+  }, [searched]);
 
   const topInc = useMemo(() => {
     const m = {};
-    rows.forEach((r) => { m[r.incident] = (m[r.incident] || 0) + 1; });
+    searched.forEach((r) => { m[r.incident] = (m[r.incident] || 0) + 1; });
     return Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  }, [rows]);
+  }, [searched]);
 
   async function exportExcel() {
-    try { await api.exportViolations(filters); }
-    catch (e) { setErr(e.message); }
+    try {
+      await api.exportViolations(filters);
+      toast("ok", t("exportOk"));
+    } catch {
+      toast("err", t("errGeneric"));
+    }
+  }
+
+  function exportPdf() {
+    const ok = exportViolationsPdf({ rows: searched, t, ar, filters });
+    toast(ok ? "ok" : "warn", ok ? t("exportOk") : t("popupBlocked"));
   }
 
   return (
@@ -70,15 +115,20 @@ export default function Reports({ lang }) {
           <h2 style={{ fontSize: 22, fontWeight: 800, color: S.g800, margin: 0 }}>{t("rep")}</h2>
           <p style={{ fontSize: 13, color: S.g400, marginTop: 2 }}>{ar ? "\u0633\u062C\u0644 \u0627\u0644\u0645\u062E\u0627\u0644\u0641\u0627\u062A \u0648\u0627\u0644\u062A\u062D\u0644\u064A\u0644\u0627\u062A" : "Violation history and analytics"}</p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+            <span style={{ position: "absolute", insetInlineStart: 12, pointerEvents: "none", display: "flex" }}>{IC.srch}</span>
+            <input ref={searchRef} style={{ ...inp, padding: "10px 14px 10px 14px", paddingInlineStart: 36, width: 190 }} placeholder={t("search")} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t("search")} />
+          </div>
           <BtnSec onClick={() => setFilterOpen(!filterOpen)}>{IC.filter} <span>{t("filters")}</span></BtnSec>
-          <BtnPri onClick={exportExcel}>{IC.dl} <span>{t("export")}</span></BtnPri>
+          {isHR && <BtnSec onClick={exportPdf}>{IC.dl} <span>{t("exportPdf")}</span></BtnSec>}
+          {isHR && <BtnPri onClick={exportExcel}>{IC.dl} <span>{t("export")}</span></BtnPri>}
         </div>
       </div>
 
       {filterOpen && (
         <Card style={{ background: S.g50 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14 }}>
             <FG label={t("employee")}>
               <select style={{ ...inp, cursor: "pointer" }} value={filters.employee} onChange={(e) => setFilters({ ...filters, employee: e.target.value })}>
                 <option value="">{t("all")}</option>
@@ -94,7 +144,7 @@ export default function Reports({ lang }) {
             <FG label={t("penLvl")}>
               <select style={{ ...inp, cursor: "pointer" }} value={filters.penalty} onChange={(e) => setFilters({ ...filters, penalty: e.target.value })}>
                 <option value="">{t("all")}</option>
-                {PENALTIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                {PENALTY_LEVELS.map((p) => <option key={p} value={p}>{p}</option>)}
               </select>
             </FG>
           </div>
@@ -103,85 +153,47 @@ export default function Reports({ lang }) {
 
       {err && <div style={{ color: S.err, fontSize: 13 }}>Error: {err}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16 }}>
-        <KpiCard icon={IC.warn} iconBg="rgba(232,130,92,.1)" value={totals.count} label={t("totV")} />
-        <KpiCard icon={IC.users} iconBg="rgba(47,184,158,.1)" value={totals.emp} label={t("totE")} />
-        <KpiCard icon={IC.clock} iconBg="rgba(217,119,6,.1)" value={totals.ded} label={t("totD")} />
-        <KpiCard icon={IC.shieldR} iconBg="rgba(220,38,38,.1)" value={totals.freezes} label={t("actF")} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 16 }}>
+        {loading ? (
+          <><KpiSkeleton /><KpiSkeleton /><KpiSkeleton /><KpiSkeleton /></>
+        ) : (
+          <>
+            <KpiCard icon={IC.warn} iconBg="rgba(232,130,92,.1)" value={totals.count} label={t("totV")} />
+            <KpiCard icon={IC.users} iconBg="rgba(47,184,158,.1)" value={totals.emp} label={t("totE")} />
+            <KpiCard icon={IC.clock} iconBg="rgba(217,119,6,.1)" value={totals.ded} label={t("totD")} />
+            <KpiCard icon={IC.shieldR} iconBg="rgba(220,38,38,.1)" value={totals.freezes} label={t("actF")} />
+          </>
+        )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 20 }}>
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("penDist")}</h3>
-          {rows.length === 0 ? <Empty text={t("noData")} /> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {PENALTIES.map((lv) => {
-                const count = byColor[lv] || 0;
-                const pct = rows.length ? (count / rows.length) * 100 : 0;
-                return (
-                  <div key={lv} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <PenBadge level={lv} lang={lang} />
-                    <div style={{ flex: 1, height: 8, background: S.g100, borderRadius: 999, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: S.pri, borderRadius: 999 }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: S.g700, minWidth: 28, textAlign: ar ? "left" : "right" }}>{count}</span>
-                  </div>
-                );
-              })}
-            </div>
+          {searched.length === 0 ? <Empty text={t("noData")} /> : (
+            <PenaltyDist byColor={byColor} total={searched.length} lang={lang} ar={ar} />
           )}
         </Card>
 
         <Card>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 16 }}>{t("topInc")}</h3>
           {topInc.length === 0 ? <Empty text={t("noData")} /> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {topInc.map(([name, n]) => {
-                const max = topInc[0][1] || 1;
-                return (
-                  <div key={name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 12, color: S.g600, minWidth: 150 }}>{name}</span>
-                    <div style={{ flex: 1, height: 8, background: S.g100, borderRadius: 999, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${(n / max) * 100}%`, background: S.acc, borderRadius: 999 }} />
-                    </div>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: S.g700 }}>{n}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <BarList items={topInc} color={S.acc} ar={ar} />
           )}
         </Card>
       </div>
 
-      <Card flush>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: `1px solid ${S.g100}` }}>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, margin: 0 }}>{t("vHist")}</h3>
-          <span style={{ fontSize: 12, color: S.g400 }}>{rows.length} records{loading ? " \u2026" : ""}</span>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr>{[t("employee"), t("cat"), t("inc"), t("pen"), t("ded"), t("subBy"), t("date"), t("act")].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
-            <tbody>
-              {rows.length === 0 ? (
-                <tr><td colSpan={8}><Empty text={t("noViol")} /></td></tr>
-              ) : rows.map((r) => (
-                <tr key={r.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
-                  <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{r.employee_name}</td>
-                  <td style={{ padding: "12px 16px", color: S.g600 }}>{r.category}</td>
-                  <td style={{ padding: "12px 16px", color: S.g600 }}>{r.incident}</td>
-                  <td style={{ padding: "12px 16px" }}><PenBadge level={r.penalty_color} lang={lang} /></td>
-                  <td style={{ padding: "12px 16px", color: S.g700, fontWeight: 600 }}>{r.deduction_days} {t("days")}</td>
-                  <td style={{ padding: "12px 16px", color: S.g600 }}>{r.submitted_by}</td>
-                  <td style={{ padding: "12px 16px", color: S.g500, fontSize: 12 }}>{r.created_at?.slice(0, 16)}</td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <button onClick={() => remove(r.id)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      <ViolationsTable pg={pg} loading={loading} total={searched.length} canDelete={canDelete} onDelete={setConfirmId} ar={ar} lang={lang} t={t} />
+
+      <ConfirmModal
+        open={confirmId !== null}
+        onClose={() => setConfirmId(null)}
+        onConfirm={remove}
+        busy={deleting}
+        title={t("confirmDel")}
+        body={`${t("del")} #${confirmId} — ${t("irreversible")}`}
+        confirmLabel={t("del")}
+        cancelLabel={t("cancel")}
+      />
     </div>
   );
 }

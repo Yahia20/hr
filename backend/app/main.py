@@ -1,17 +1,22 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from .auth import require_admin
+from .auth import bootstrap_admin
 from .db import init_db
+from .routers import auth as auth_router
 from .routers import employees, matrix, stats, violations
+
+logger = logging.getLogger("hr")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    bootstrap_admin()
     yield
 
 
@@ -24,9 +29,23 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.path.startswith("/api"):
+        # API responses carry HR data; keep them out of shared caches.
+        response.headers["Cache-Control"] = "no-store"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
 
 
 @app.get("/health")
@@ -34,13 +53,10 @@ def health():
     return {"ok": True}
 
 
-@app.get("/api/auth/check")
-def auth_check(user: str = Depends(require_admin)):
-    return {"user": user}
-
-
-_protected = [Depends(require_admin)]
-app.include_router(employees.router, prefix="/api", dependencies=_protected)
-app.include_router(violations.router, prefix="/api", dependencies=_protected)
-app.include_router(stats.router, prefix="/api", dependencies=_protected)
-app.include_router(matrix.router, prefix="/api", dependencies=_protected)
+# Auth (login/logout/reset) is the only open router; every other router
+# declares its own role requirements per endpoint (see routers/*.py).
+app.include_router(auth_router.router, prefix="/api")
+app.include_router(employees.router, prefix="/api")
+app.include_router(violations.router, prefix="/api")
+app.include_router(stats.router, prefix="/api")
+app.include_router(matrix.router, prefix="/api")

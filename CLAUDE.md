@@ -16,11 +16,13 @@ backend/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py              # FastAPI app assembly: CORS, lifespan, router mounting
-│   ├── auth.py              # require_admin dependency (HTTP Basic)
+│   ├── auth.py              # sessions, bcrypt, CSRF, roles, lockout
+│   ├── emailer.py           # SMTP helper (password-reset mail)
 │   ├── db.py                # SQLAlchemy engine/session, init_db()
 │   ├── schemas.py           # Pydantic request/response models
 │   ├── penalties.py         # penalty/escalation engine
 │   └── routers/            # API routes split by domain
+│       ├── auth.py          # login/logout/me, forgot/reset, user management
 │       ├── employees.py
 │       ├── violations.py
 │       ├── stats.py
@@ -49,19 +51,26 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `GET/POST /api/employees`, `DELETE /api/employees/{name}` — list / add / delete
 - `GET /api/stats/dashboard` — dashboard aggregates
 - `GET /api/matrix` — rules matrix and penalty map (served from `penalties.py` in memory, not the DB)
-- All `/api` routers are mounted behind `require_admin` (HTTP Basic); `/health` and `/api/auth/check` are the only unguarded endpoints
+- `POST /api/auth/login|logout`, `GET /api/auth/me`, `POST /api/auth/forgot|reset` — cookie-session auth
+- `GET/POST /api/auth/users`, `DELETE /api/auth/users/{id}` — user management (HR Manager only)
+- Auth is an httpOnly `hr_session` cookie + `X-CSRF-Token` header on mutations (double-submit `hr_csrf` cookie). Every endpoint declares role requirements via `require_user`/`require_role` from `auth.py`; `/health` and the login/forgot/reset endpoints are the only unguarded ones.
+- Roles: `hr_manager` (everything), `hr_officer` (log/manage, no deletes or user admin), `dept_head` (read-only, own department), `employee` (own violations only)
 
 ## Database tables
-`init_db()` in `db.py` creates exactly two tables:
+`init_db()` in `db.py` creates five tables:
 - `employees` — name (unique), email, department, manager_email
 - `violations` — employee_name, category, incident, penalty_color, penalty_label, deduction_hours, deduction_days, freeze_months, comment, submitted_by, proof_image (base64), created_at
+- `users` — email (unique), name, role (hr_manager/hr_officer/dept_head/employee), department, bcrypt password_hash, is_active, lockout columns
+- `sessions` — SHA-256 of the session cookie token, user_id, csrf_token, expires_at
+- `password_resets` — SHA-256 of the reset token, user_id, expires_at, used
 
-There is no `rules` or `users` table: the rules matrix lives in `penalties.py`, and admin auth is a single env-configured credential (`HR_ADMIN_USERNAME` / `HR_ADMIN_PASSWORD`) checked in `auth.py`.
+There is no `rules` table: the rules matrix lives in `penalties.py`. The first HR Manager account is seeded from `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` when the `users` table is empty. Failed logins are rate-limited per IP and per account (5 per 15 min each). Other env vars: `COOKIE_SECURE` (set `true` in prod), `APP_BASE_URL` (reset links), `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `CORS_ORIGINS`, `HR_DB_FILE`.
 
 ## Known issues (being fixed)
 - [x] CORS wildcard `*` — now locked to an allow-list via `CORS_ORIGINS` env var
 - [x] No auth guards on API routes — all `/api` routers now require `require_admin`
-- [ ] Hardcoded user "Amin" in frontend — no real login flow
+- [x] Default `admin123` password — auth now fails closed; bcrypt hash supported; per-IP login lockout (see `SECURITY_AUDIT.md`)
+- [x] Hardcoded user "Amin" in frontend — real login flow with per-user accounts, roles, cookie sessions (Phase 2)
 - [ ] Proof images stored as base64 in DB — should use file storage
 - [ ] Design System page visible in production nav — should be hidden
 - [ ] Settings page is a stub — implement or remove
