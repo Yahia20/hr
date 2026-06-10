@@ -64,6 +64,9 @@ export const api = {
   dashboard: () => req("/stats/dashboard"),
   matrix: () => req("/matrix"),
 
+  getSettings: () => req("/settings"),
+  sendTestEmail: () => req("/settings/test-email", { method: "POST" }),
+
   exportViolations: async (filters = {}) => {
     const qs = new URLSearchParams(
       Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")

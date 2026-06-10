@@ -1,14 +1,16 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .auth import bootstrap_admin
 from .db import init_db
 from .routers import auth as auth_router
-from .routers import employees, matrix, stats, violations
+from .routers import employees, matrix, settings, stats, violations
 
 logger = logging.getLogger("hr")
 
@@ -60,3 +62,17 @@ app.include_router(employees.router, prefix="/api")
 app.include_router(violations.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(matrix.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
+
+
+# Serve the built React SPA from the same origin as the API. The frontend talks
+# to a relative "/api" with same-origin cookies, so both must share one origin.
+# Mounted last (after the routers and /health) so it only catches non-API paths;
+# skipped entirely when no build is present (e.g. local dev with the Vite proxy).
+_frontend_dist = os.environ.get("FRONTEND_DIST") or str(
+    Path(__file__).resolve().parents[2] / "frontend" / "dist"
+)
+if os.path.isdir(_frontend_dist):
+    app.mount("/", StaticFiles(directory=_frontend_dist, html=True), name="frontend")
+else:
+    logger.warning("Frontend build not found at %s; serving API only", _frontend_dist)

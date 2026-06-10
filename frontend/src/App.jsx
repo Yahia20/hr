@@ -14,11 +14,8 @@ import LogViolation from "./pages/LogViolation";
 import Employees from "./pages/Employees";
 import Reports from "./pages/Reports";
 import Users from "./pages/Users";
+import Settings from "./pages/Settings";
 import Login from "./pages/Login";
-
-const PLACEHOLDERS = {
-  set: { icon: IC.setBig, title: "comingSoon", sub: "comingSoonSub" },
-};
 
 // Pages each role may open; the first entry is the role's landing page.
 const ROLE_PAGES = {
@@ -118,21 +115,14 @@ export default function HRSystem() {
     emp: <Employees lang={lang} user={user} />,
     rep: <Reports lang={lang} user={user} />,
     users: <Users lang={lang} user={user} />,
+    set: <Settings lang={lang} user={user} dark={dark} onToggleDark={toggleDark} onToggleLang={toggleLang} />,
   };
 
   let content;
-  if (!allowed.includes(page)) {
+  if (!allowed.includes(page) || !PAGES[page]) {
     content = <Card><Empty text={t("noData")} /></Card>;
-  } else if (PAGES[page]) {
-    content = PAGES[page];
   } else {
-    const p = PLACEHOLDERS[page];
-    content = (
-      <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 800, color: S.g800, margin: 0 }}>{t(page)}</h2>
-        <Card><Empty icon={p?.icon} text={t(p?.title || "comingSoon")} sub={p?.sub && t(p.sub)} /></Card>
-      </div>
-    );
+    content = PAGES[page];
   }
 
   const shortcuts = [

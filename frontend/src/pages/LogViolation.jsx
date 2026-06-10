@@ -18,6 +18,7 @@ export default function LogViolation({ lang, user }) {
   const [cat, setCat] = useState("");
   const [inc, setInc] = useState("");
   const [emp, setEmp] = useState("");
+  const [hrRep, setHrRep] = useState(user?.name || "");
   const [comment, setComment] = useState("");
   const [force, setForce] = useState(false);
   const [override, setOverride] = useState(-1);
@@ -73,6 +74,7 @@ export default function LogViolation({ lang, user }) {
       const proofB64 = proof.dataUrl ? proof.dataUrl.split(",")[1] || "" : "";
       const payload = {
         employee_name: emp, category: cat, incident: inc, comment,
+        submitted_by: hrRep.trim(),
         force_investigation: force,
         override_days: override >= 0 ? Number(override) : null,
         proof_image: proofB64,
@@ -155,7 +157,7 @@ export default function LogViolation({ lang, user }) {
               </select>
             </FG>
             <FG label={t("hrRep")}>
-              <input style={{ ...inp, background: S.g50, color: S.g500 }} value={user?.name || ""} readOnly aria-readonly="true" />
+              <input style={inp} value={hrRep} onChange={(e) => setHrRep(e.target.value)} placeholder={user?.name || ""} />
             </FG>
           </div>
           <div style={{ marginBottom: 20 }}>

@@ -1,0 +1,18 @@
+# Dependencies / build artifacts (rebuilt inside the image)
+**/node_modules
+frontend/dist
+**/__pycache__
+**/*.pyc
+
+# Local data & secrets — never bake these into the image
+**/hr_system.db
+**/*.sqlite
+**/.env
+
+# Legacy single-file tree, not part of this deploy
+production/
+
+# VCS / editor / tooling
+.git
+.tools
+*.log

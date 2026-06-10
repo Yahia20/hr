@@ -35,3 +35,41 @@ def send_email(to: str, subject: str, body: str) -> bool:
     except (smtplib.SMTPException, OSError):
         logger.exception("Failed to send email to %s", to)
         return False
+
+
+def send_violation_emails(
+    *,
+    employee_name: str,
+    employee_email: str,
+    manager_email: str,
+    category: str,
+    incident: str,
+    penalty_label: str,
+    deduction_days: float,
+    comment: str,
+    submitted_by: str,
+) -> None:
+    """Notify the employee and their manager that a violation was logged.
+
+    Best-effort and side-effect only: runs in a background task, sends to each
+    recipient independently, and never raises (send_email swallows failures)."""
+    subject = f"HR Disciplinary Notice — {employee_name}"
+    lines = [
+        f"A disciplinary violation has been recorded for {employee_name}.",
+        "",
+        f"Category:  {category}",
+        f"Incident:  {incident}",
+        f"Penalty:   {penalty_label}",
+        f"Deduction: {deduction_days} day(s)",
+    ]
+    if comment:
+        lines += ["", f"Comment: {comment}"]
+    lines += ["", f"Recorded by: {submitted_by}", "", "— Travel Gate KSA HR System"]
+    body = "\n".join(lines)
+
+    # dedupe so we don't double-send when employee and manager share an address
+    recipients = {e.strip() for e in (employee_email, manager_email) if e and e.strip()}
+    if not recipients:
+        logger.info("Violation for %s has no recipient emails; nothing sent", employee_name)
+    for to in recipients:
+        send_email(to, subject, body)
