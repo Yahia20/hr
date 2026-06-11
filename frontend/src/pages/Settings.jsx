@@ -90,7 +90,7 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
     }
   }
 
-  const TRANSPORT_LABEL = { resend: "Resend (HTTP API)", smtp: "SMTP", none: t("notConfigured") };
+  const TRANSPORT_LABEL = { brevo: "Brevo (HTTP API)", resend: "Resend (HTTP API)", smtp: "SMTP", none: t("notConfigured") };
 
   const initial = (user?.name || "?").charAt(0).toUpperCase();
 

@@ -9,9 +9,19 @@ from email.message import EmailMessage
 
 logger = logging.getLogger("hr.email")
 
-# Preferred transport: Resend's HTTP API (port 443). Railway blocks outbound
-# SMTP ports (25/465/587), so SMTP is kept only as a fallback for hosts that
-# allow it (e.g. a future self-managed deploy).
+# Email transports, in priority order: Brevo -> Resend -> SMTP. The HTTP APIs
+# (Brevo/Resend) use port 443; Railway blocks outbound SMTP (25/465/587), so
+# SMTP is only a fallback for hosts that allow it.
+#
+# Brevo only needs a *verified single sender* (a confirmation-link on any address
+# you own) to email arbitrary recipients — no domain/DNS — so it's the choice
+# when you don't own a domain. Resend can email arbitrary recipients only after
+# a domain is verified (otherwise test mode: owner's address only).
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+BREVO_SENDER = os.environ.get("BREVO_SENDER", "")  # a Brevo-verified sender email
+BREVO_SENDER_NAME = os.environ.get("BREVO_SENDER_NAME", "Travel Gate KSA HR")
+BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
+
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM = os.environ.get("RESEND_FROM", "HR System <onboarding@resend.dev>")
 RESEND_ENDPOINT = "https://api.resend.com/emails"
@@ -45,11 +55,17 @@ def resend_configured() -> bool:
     return bool(RESEND_API_KEY)
 
 
+def brevo_configured() -> bool:
+    return bool(BREVO_API_KEY and BREVO_SENDER)
+
+
 def email_configured() -> bool:
-    return resend_configured() or smtp_configured()
+    return brevo_configured() or resend_configured() or smtp_configured()
 
 
 def email_transport() -> str:
+    if brevo_configured():
+        return "brevo"
     if resend_configured():
         return "resend"
     if smtp_configured():
@@ -58,34 +74,58 @@ def email_transport() -> str:
 
 
 def email_from() -> str:
-    return RESEND_FROM if resend_configured() else SMTP_FROM
+    if brevo_configured():
+        return f"{BREVO_SENDER_NAME} <{BREVO_SENDER}>"
+    if resend_configured():
+        return RESEND_FROM
+    return SMTP_FROM
 
 
-def _send_via_resend(to: str, subject: str, body: str) -> bool:
-    payload = json.dumps({"from": RESEND_FROM, "to": [to], "subject": subject, "text": body}).encode()
-    req = urllib.request.Request(
-        RESEND_ENDPOINT,
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            # Resend is fronted by Cloudflare, which bans the default
-            # "Python-urllib/x.y" agent (403, error 1010). Send our own.
-            "User-Agent": "TravelGateHR/1.0 (+https://github.com/Yahia20/hr)",
-        },
-    )
+def _post_json(url: str, headers: dict, body: dict, provider: str, to: str) -> bool:
+    data = json.dumps(body).encode()
+    base = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        # These APIs sit behind Cloudflare, which bans the default
+        # "Python-urllib/x.y" agent (403, error 1010). Send our own.
+        "User-Agent": "TravelGateHR/1.0 (+https://github.com/Yahia20/hr)",
+    }
+    req = urllib.request.Request(url, data=data, method="POST", headers={**base, **headers})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
-        logger.error("Resend rejected email to %s: HTTP %s %s", to, e.code, detail)
+        logger.error("%s rejected email to %s: HTTP %s %s", provider, to, e.code, detail)
         return False
     except OSError:
-        logger.exception("Failed to reach Resend for %s", to)
+        logger.exception("Failed to reach %s for %s", provider, to)
         return False
+
+
+def _send_via_brevo(to: str, subject: str, body: str) -> bool:
+    return _post_json(
+        BREVO_ENDPOINT,
+        {"api-key": BREVO_API_KEY},
+        {
+            "sender": {"email": BREVO_SENDER, "name": BREVO_SENDER_NAME},
+            "to": [{"email": to}],
+            "subject": subject,
+            "textContent": body,
+        },
+        "Brevo",
+        to,
+    )
+
+
+def _send_via_resend(to: str, subject: str, body: str) -> bool:
+    return _post_json(
+        RESEND_ENDPOINT,
+        {"Authorization": f"Bearer {RESEND_API_KEY}"},
+        {"from": RESEND_FROM, "to": [to], "subject": subject, "text": body},
+        "Resend",
+        to,
+    )
 
 
 def _send_via_smtp(to: str, subject: str, body: str) -> bool:
@@ -108,6 +148,8 @@ def send_email(to: str, subject: str, body: str) -> bool:
     """Send a plain-text email via the configured transport. Returns False (and
     logs) on any failure — callers must not leak success/failure to API clients
     (user enumeration)."""
+    if brevo_configured():
+        return _send_via_brevo(to, subject, body)
     if resend_configured():
         return _send_via_resend(to, subject, body)
     if smtp_configured():
