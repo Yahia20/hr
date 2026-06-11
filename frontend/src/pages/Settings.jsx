@@ -4,7 +4,7 @@ import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, BtnPri } from "../components";
+import { Card, BtnPri, inp } from "../components";
 import { useToast } from "../toast";
 
 const ROLE_LABEL_KEY = { hr_manager: "roleManager", hr_officer: "roleOfficer", dept_head: "roleDeptHead", employee: "roleEmployee" };
@@ -70,6 +70,7 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
 
   const [settings, setSettings] = useState(null);
   const [testing, setTesting] = useState(false);
+  const [testTo, setTestTo] = useState(user?.email || "");
 
   useEffect(() => {
     if (!isManager) return;
@@ -79,8 +80,8 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
   async function sendTest() {
     setTesting(true);
     try {
-      const res = await api.sendTestEmail();
-      if (res.sent) toast("ok", t("testSent"));
+      const res = await api.sendTestEmail(testTo.trim());
+      if (res.sent) toast("ok", `${t("testSent")} → ${res.to}`);
       else toast("err", t("smtpMissing"));
     } catch (e) {
       toast("err", e.message || t("errGeneric"));
@@ -88,6 +89,8 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
       setTesting(false);
     }
   }
+
+  const TRANSPORT_LABEL = { resend: "Resend (HTTP API)", smtp: "SMTP", none: t("notConfigured") };
 
   const initial = (user?.name || "?").charAt(0).toUpperCase();
 
@@ -123,25 +126,29 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
       {/* Email & notifications — managers only */}
       {isManager && (
         <Section icon={IC.mail} title={t("emailNotif")} sub={t("emailNotifSub")}>
-          <Row title={t("smtpStatus")} sub={settings?.smtp_host ? `${settings.smtp_host}` : t("smtpEnvHint")}>
-            <span style={{ fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: settings?.smtp_configured ? S.okL : S.warnL, color: settings?.smtp_configured ? S.ok : S.warn }}>
-              {settings == null ? "…" : settings.smtp_configured ? t("configured") : t("notConfigured")}
+          <Row title={t("smtpStatus")} sub={settings ? TRANSPORT_LABEL[settings.transport] : ""}>
+            <span style={{ fontSize: 12, fontWeight: 700, padding: "4px 11px", borderRadius: 999, background: settings?.email_configured ? S.okL : S.warnL, color: settings?.email_configured ? S.ok : S.warn }}>
+              {settings == null ? "…" : settings.email_configured ? t("configured") : t("notConfigured")}
             </span>
           </Row>
-          {settings?.smtp_from && (
+          {settings?.email_from && (
             <Row title={t("smtpFrom")}>
-              <span style={{ fontSize: 12.5, color: S.g500 }}>{settings.smtp_from}</span>
+              <span style={{ fontSize: 12.5, color: S.g500 }}>{settings.email_from}</span>
             </Row>
           )}
           <Row title={t("violationEmails")} sub={t("violationEmailsSub")}>
             <span style={{ fontSize: 12.5, color: S.g500 }}>{t("autoOn")}</span>
           </Row>
-          <div style={{ marginTop: 16 }}>
-            <BtnPri onClick={sendTest} disabled={testing || !settings?.smtp_configured}>
-              {IC.mail} <span>{testing ? "…" : t("sendTest")}</span>
-            </BtnPri>
-            {settings != null && !settings.smtp_configured && (
-              <p style={{ fontSize: 12, color: S.g400, marginTop: 10 }}>{t("smtpEnvHint")}</p>
+          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: S.g500 }}>{t("sendTestTo")}</label>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <input style={{ ...inp, maxWidth: 280 }} type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder={user?.email || ""} />
+              <BtnPri onClick={sendTest} disabled={testing || !settings?.email_configured || !testTo.trim()}>
+                {IC.mail} <span>{testing ? "…" : t("sendTest")}</span>
+              </BtnPri>
+            </div>
+            {settings != null && !settings.email_configured && (
+              <p style={{ fontSize: 12, color: S.g400 }}>{t("smtpEnvHint")}</p>
             )}
           </div>
         </Section>

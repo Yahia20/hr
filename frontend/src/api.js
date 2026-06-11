@@ -65,7 +65,7 @@ export const api = {
   matrix: () => req("/matrix"),
 
   getSettings: () => req("/settings"),
-  sendTestEmail: () => req("/settings/test-email", { method: "POST" }),
+  sendTestEmail: (to) => req("/settings/test-email", { method: "POST", body: JSON.stringify({ to: to || null }) }),
 
   exportViolations: async (filters = {}) => {
     const qs = new URLSearchParams(
