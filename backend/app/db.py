@@ -5,6 +5,10 @@ from contextlib import contextmanager
 DB_FILE = os.environ.get("HR_DB_FILE", os.path.join(os.path.dirname(__file__), "..", "..", "hr_system.db"))
 DB_FILE = os.path.abspath(DB_FILE)
 
+# Create the parent directory if needed so HR_DB_FILE can point at a freshly
+# mounted volume (e.g. Railway's /data/hr_system.db) that doesn't exist yet.
+os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+
 
 @contextmanager
 def db():
