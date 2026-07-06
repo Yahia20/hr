@@ -34,6 +34,7 @@ async def lifespan(_app: FastAPI):
     init_db()
     bootstrap_admin()
     _warn_insecure_attendance()
+    attendance.purge_location_data()  # enforce the retention window on boot
     yield
 
 

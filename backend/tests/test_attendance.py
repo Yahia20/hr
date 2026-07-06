@@ -237,6 +237,60 @@ def test_low_precision_flagged(admin, new_employee):
     assert "low_precision" in row["risk"]["reasons"]
 
 
+def _insert_attendance(user_id, work_date, coords=True):
+    from app.db import db
+    with db() as conn:
+        conn.execute(
+            """INSERT INTO attendance
+               (user_id, work_date, clock_in_at, clock_in_lat, clock_in_lng, clock_in_accuracy,
+                clock_in_office, clock_in_distance_m, clock_in_verified, clock_in_ip)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (user_id, work_date, f"{work_date} 08:00:00",
+             24.7 if coords else None, 46.6 if coords else None, 15 if coords else None,
+             "HQ", 40.0, 1, "203.0.113.9"),
+        )
+
+
+def test_retention_purges_old_coords_keeps_facts(admin, new_employee):
+    from app.db import db
+    from app.routers.attendance import purge_location_data
+    emp, email = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 24.7, "lng": 46.6, "accuracy": 15}, headers=csrf(emp))
+    user_id = _admin_row(admin, email)["user_id"]
+
+    # A punch from ~200 days ago, with coordinates + IP.
+    _insert_attendance(user_id, "2020-01-01")
+    scrubbed = purge_location_data(90)
+    assert scrubbed >= 1
+
+    with db() as conn:
+        old = dict(conn.execute(
+            "SELECT * FROM attendance WHERE user_id = ? AND work_date = '2020-01-01'", (user_id,)
+        ).fetchone())
+    # Raw location + IP gone…
+    assert old["clock_in_lat"] is None and old["clock_in_lng"] is None
+    assert old["clock_in_accuracy"] is None and old["clock_in_ip"] == ""
+    # …but the derived audit facts remain.
+    assert old["clock_in_office"] == "HQ" and old["clock_in_distance_m"] == 40.0
+    assert old["clock_in_verified"] == 1 and old["clock_in_at"] == "2020-01-01 08:00:00"
+
+
+def test_retention_keeps_recent_rows(admin, new_employee):
+    from app.db import db
+    from app.routers.attendance import purge_location_data
+    emp, email = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 24.7, "lng": 46.6, "accuracy": 15}, headers=csrf(emp))
+    row = _admin_row(admin, email)
+    purge_location_data(90)
+    fresh = _admin_row(admin, email)
+    assert fresh["clock_in_lat"] is not None  # today's punch is untouched
+
+
+def test_retention_disabled_with_zero():
+    from app.routers.attendance import purge_location_data
+    assert purge_location_data(0) == 0
+
+
 def test_risk_hidden_from_employee_and_ip_not_leaked(new_employee):
     emp, _ = new_employee()
     emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 0}, headers=csrf(emp))
