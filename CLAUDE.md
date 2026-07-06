@@ -55,7 +55,7 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `POST /api/auth/login|logout`, `GET /api/auth/me`, `POST /api/auth/forgot|reset` — cookie-session auth
 - `GET/POST /api/auth/users`, `DELETE /api/auth/users/{id}` — user management (HR Manager only)
 - `POST /api/attendance/clock-in|clock-out`, `GET /api/attendance/me` — GPS + fingerprint-verified attendance punches (any signed-in user)
-- `GET /api/attendance`, `GET /api/attendance/export` — attendance log (role-scoped) and Excel export (HR staff)
+- `GET /api/attendance`, `GET /api/attendance/export` — attendance log (role-scoped; list is paginated via `limit`/`offset` and returns `{rows, total, limit, offset}`) and Excel export (HR staff)
 - `GET/POST /api/attendance/offices`, `DELETE /api/attendance/offices/{id}` — geofence office locations (read: HR staff, write: HR Manager)
 - `POST /api/attendance/webauthn/register/begin|complete`, `POST /api/attendance/webauthn/clock/begin`, `GET/DELETE /api/attendance/webauthn/credentials` — WebAuthn (device fingerprint) enrolment and clock assertions
 - Auth is an httpOnly `hr_session` cookie + `X-CSRF-Token` header on mutations (double-submit `hr_csrf` cookie). Every endpoint declares role requirements via `require_user`/`require_role` from `auth.py`; `/health` and the login/forgot/reset endpoints are the only unguarded ones.
@@ -90,6 +90,11 @@ There is no `rules` table: the rules matrix lives in `penalties.py`. The first H
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+
+# Backend tests (pytest)
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest -q
 
 # Docker
 docker-compose up --build

@@ -5,11 +5,11 @@ import math
 import os
 import re
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from webauthn import (
@@ -83,7 +83,12 @@ def _rp_id() -> str:
 
 
 def _expected_origins() -> list[str]:
-    origins = {"http://localhost:5173", "http://127.0.0.1:5173"}
+    origins = set()
+    # Local dev origins are only trusted when not running in production
+    # (COOKIE_SECURE=true marks prod), so a localhost-issued assertion can't be
+    # replayed against the deployed instance.
+    if os.environ.get("COOKIE_SECURE", "false").lower() not in ("1", "true", "yes"):
+        origins.update({"http://localhost:5173", "http://127.0.0.1:5173"})
     base = os.environ.get("APP_BASE_URL", "").strip().rstrip("/")
     if base:
         origins.add(base)
@@ -95,7 +100,9 @@ def _expected_origins() -> list[str]:
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    # naive UTC (tz stripped) to match the "%Y-%m-%d %H:%M:%S" strings stored in
+    # the DB, while avoiding the deprecated datetime.utcnow().
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _fmt(dt: datetime) -> str:
@@ -390,8 +397,10 @@ def clock_in(payload: ClockActionIn, user: CurrentUser = Depends(require_user)):
         if _today_row(conn, user.id, work_date) is not None:
             raise HTTPException(409, "already_clocked_in")
 
-    verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
+    # Geofence first: it's read-only, so a location failure won't have consumed
+    # the WebAuthn challenge or bumped the credential's sign counter.
     office, distance = _check_geofence(payload)
+    verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
 
     try:
         with db() as conn:
@@ -418,8 +427,8 @@ def clock_out(payload: ClockActionIn, user: CurrentUser = Depends(require_user))
     if row is None:
         raise HTTPException(409, "not_clocked_in")
 
-    verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
     office, distance = _check_geofence(payload)
+    verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
 
     # Re-clocking out is allowed: the last punch of the day wins.
     with db() as conn:
@@ -449,7 +458,10 @@ def _worked_hours(row: dict) -> Optional[float]:
     return round(max((t_out - t_in).total_seconds(), 0) / 3600, 2)
 
 
-def _fetch_records(user: CurrentUser, employee: Optional[str], date_from: Optional[str], date_to: Optional[str]):
+MAX_PAGE_SIZE = 200
+
+
+def _build_filters(user: CurrentUser, employee: Optional[str], date_from: Optional[str], date_to: Optional[str]):
     _check_date(date_from, "date_from")
     _check_date(date_to, "date_to")
     clauses = ["1=1"]
@@ -471,13 +483,21 @@ def _fetch_records(user: CurrentUser, employee: Optional[str], date_from: Option
     if date_to:
         clauses.append("a.work_date <= ?")
         params.append(date_to)
+    return " AND ".join(clauses), params
+
+
+def _fetch_records(where: str, params: list, limit: Optional[int] = None, offset: int = 0):
     sql = (
         "SELECT a.*, u.name, u.email, u.department FROM attendance a "
-        f"JOIN users u ON u.id = a.user_id WHERE {' AND '.join(clauses)} "
+        f"JOIN users u ON u.id = a.user_id WHERE {where} "
         "ORDER BY a.work_date DESC, a.clock_in_at DESC"
     )
+    q_params = list(params)
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        q_params += [limit, offset]
     with db() as conn:
-        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql, q_params).fetchall()]
     for r in rows:
         r["worked_hours"] = _worked_hours(r)
     return rows
@@ -488,9 +508,18 @@ def list_attendance(
     employee: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
     user: CurrentUser = Depends(require_user),
 ):
-    return _fetch_records(user, employee, date_from, date_to)
+    where, params = _build_filters(user, employee, date_from, date_to)
+    with db() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM attendance a JOIN users u ON u.id = a.user_id WHERE {where}",
+            params,
+        ).fetchone()[0]
+    rows = _fetch_records(where, params, limit=limit, offset=offset)
+    return {"rows": rows, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/export")
@@ -500,7 +529,8 @@ def export_attendance(
     date_to: Optional[str] = None,
     user: CurrentUser = Depends(_hr_staff),
 ):
-    rows = _fetch_records(user, employee, date_from, date_to)
+    where, params = _build_filters(user, employee, date_from, date_to)
+    rows = _fetch_records(where, params)
     offset = timedelta(minutes=TZ_OFFSET_MINUTES)
 
     def local(ts: Optional[str]) -> str:

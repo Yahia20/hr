@@ -8,7 +8,10 @@ DB_FILE = os.path.abspath(DB_FILE)
 
 @contextmanager
 def db():
-    conn = sqlite3.connect(DB_FILE)
+    # timeout=30 makes a writer wait (up to 30s) for a competing write to finish
+    # instead of failing immediately with "database is locked" — important during
+    # the morning attendance clock-in spike when many writes land at once.
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
@@ -24,6 +27,10 @@ def db():
 def init_db() -> None:
     raw = sqlite3.connect(DB_FILE)
     try:
+        # WAL lets readers and a writer proceed concurrently (readers no longer
+        # block the writer and vice-versa). It's a persistent property of the DB
+        # file, so setting it once at init is enough.
+        raw.execute("PRAGMA journal_mode=WAL")
         raw.executescript(
             """
             CREATE TABLE IF NOT EXISTS employees (
