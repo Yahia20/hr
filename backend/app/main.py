@@ -15,17 +15,39 @@ from .routers import attendance, employees, matrix, permissions, settings, stats
 logger = logging.getLogger("hr")
 
 
-def _warn_insecure_attendance() -> None:
-    """Loudly flag a config that lets attendance be logged without proof of
-    identity (fingerprint) while running in production."""
-    is_prod = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
-    biometric_on = os.environ.get("ATTENDANCE_REQUIRE_BIOMETRIC", "true").lower() in ("1", "true", "yes")
-    if is_prod and not biometric_on:
+def _env_true(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).lower() in ("1", "true", "yes")
+
+
+def _check_production_config() -> None:
+    """Loud startup warnings when running in production (COOKIE_SECURE=true) with
+    config that would break or weaken the deployment. Warnings, not hard failures,
+    so a deploy is never bricked — but they're impossible to miss in the logs."""
+    if not _env_true("COOKIE_SECURE"):
         logger.warning(
-            "ATTENDANCE_REQUIRE_BIOMETRIC is disabled in production — attendance "
-            "can be clocked without fingerprint verification, so employees could "
-            "punch in for one another. Set ATTENDANCE_REQUIRE_BIOMETRIC=true unless "
-            "this is deliberate."
+            "COOKIE_SECURE is not 'true' — session cookies will be sent over plain "
+            "HTTP. Set COOKIE_SECURE=true in production (behind HTTPS)."
+        )
+        return  # remaining checks only matter once we're actually in prod mode
+
+    if _env_true("COOKIE_SECURE") and not _env_true("ATTENDANCE_REQUIRE_BIOMETRIC", "true"):
+        logger.warning(
+            "ATTENDANCE_REQUIRE_BIOMETRIC is disabled in production — attendance can "
+            "be clocked without fingerprint verification, so employees could punch in "
+            "for one another. Set ATTENDANCE_REQUIRE_BIOMETRIC=true unless deliberate."
+        )
+    if not os.environ.get("APP_BASE_URL", "").strip() and not os.environ.get("WEBAUTHN_RP_ID", "").strip():
+        logger.warning(
+            "APP_BASE_URL is unset in production — WebAuthn (fingerprint) will fall "
+            "back to RP ID 'localhost' and fail, and password-reset links will be "
+            "malformed. Set APP_BASE_URL to the public https URL of the app."
+        )
+    db_file = os.environ.get("HR_DB_FILE", "").strip()
+    if not db_file:
+        logger.warning(
+            "HR_DB_FILE is unset — the SQLite database lives inside the container and "
+            "is LOST on every redeploy. Point HR_DB_FILE at a mounted volume "
+            "(e.g. /data/hr_system.db)."
         )
 
 
@@ -33,7 +55,7 @@ def _warn_insecure_attendance() -> None:
 async def lifespan(_app: FastAPI):
     init_db()
     bootstrap_admin()
-    _warn_insecure_attendance()
+    _check_production_config()
     attendance.purge_location_data()  # enforce the retention window on boot
     yield
 

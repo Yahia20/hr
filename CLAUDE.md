@@ -6,8 +6,8 @@ An HR disciplinary management system for Travel Gate KSA. It tracks employee vio
 ## Tech stack
 - **Backend**: FastAPI, Python — raw `sqlite3` (no ORM) via a `db()` context manager
 - **Frontend**: React + Vite single-page app, bilingual (English/Arabic)
-- **Database**: SQLite (`hr_system.db`); path overridable via `HR_DB_FILE` env var
-- **Deployment**: Docker; target host is **Railway** (see `HANDOVER.md` § F). Not currently deployed.
+- **Database**: SQLite (`hr_system.db`); path overridable via `HR_DB_FILE` env var (point at a mounted volume in production)
+- **Deployment**: Docker → **Railway** (see the "Production deployment" section below and `backend/.env.example`).
 - **Repo**: https://github.com/Yahia20/hr
 
 ## Project structure
@@ -77,6 +77,15 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `permissions` — early-leave permissions (استئذان): employee_name, permission_date, month_key (drives the monthly quota), note, attachment (base64, HR-manager only), created_by, created_at
 
 There is no `rules` table: the rules matrix lives in `penalties.py`. The first HR Manager account is seeded from `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` when the `users` table is empty. Failed logins are rate-limited per IP and per account (5 per 15 min each). Other env vars: `COOKIE_SECURE` (set `true` in prod), `APP_BASE_URL` (reset links + WebAuthn origin/RP ID), `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `CORS_ORIGINS`, `HR_DB_FILE`. Attendance env vars: `ATTENDANCE_REQUIRE_BIOMETRIC` / `ATTENDANCE_REQUIRE_GEOFENCE` (default `true`), `ATTENDANCE_TZ_OFFSET_MINUTES` (default `180`, KSA), `WEBAUTHN_RP_ID` (defaults to the `APP_BASE_URL` hostname), `ATTENDANCE_RETENTION_DAYS` (default `90`; raw GPS coordinates/accuracy and request IPs are scrubbed from attendance rows older than this — derived facts like office/distance/verified are kept — for PDPL data-minimisation; `0` disables). The purge runs at startup and opportunistically (throttled) on clock-in. WebAuthn and geolocation both require HTTPS (or localhost).
+
+## Production deployment (Railway, Docker)
+The `Dockerfile` builds the SPA and serves it from the FastAPI app (same origin). `railway.json` sets the healthcheck to `/health`. Full env reference is in `backend/.env.example`. Checklist before going live:
+1. **Mount a Volume** and set `HR_DB_FILE` to a path on it (e.g. `/data/hr_system.db`) — SQLite otherwise lives in the ephemeral container and is wiped on every redeploy. `db.py` creates the parent dir automatically.
+2. Set `COOKIE_SECURE=true`, `APP_BASE_URL=https://<host>` (drives WebAuthn RP ID + reset links), and `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD`.
+3. The container runs uvicorn with `--proxy-headers --forwarded-allow-ips='*'` so `request.client.host` is the real client IP behind Railway's edge (correct per-IP login lockout, attendance IP audit, and HTTPS/HSTS detection). Without it, all clients share the proxy IP and one burst of failed logins would lock everyone out.
+4. On boot, `_check_production_config()` logs loud warnings for missing/weak prod config (insecure cookies, unset `APP_BASE_URL`/`HR_DB_FILE`, biometric disabled). These are warnings, not hard failures.
+
+Not yet hardened (recommendations, low priority): container runs as root (non-root user deferred due to Railway volume-permission interaction); backend deps use `>=` ranges rather than pinned versions; the repo root still holds legacy files (`main.py`, `production/`, `*.xlsx`, `HR_Report.html`) that are excluded from the image via `.dockerignore`.
 
 ## Known issues (being fixed)
 - [x] CORS wildcard `*` — now locked to an allow-list via `CORS_ORIGINS` env var
