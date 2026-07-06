@@ -203,7 +203,7 @@ export default function Attendance({ lang, user }) {
   // Clamp back onto a valid page if the result set shrank (e.g. after filtering).
   useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
 
-  const RISK_LABEL = { zero_accuracy: "riskZeroAcc", no_accuracy: "riskNoAcc", impossible_travel: "riskTeleport" };
+  const RISK_LABEL = { zero_accuracy: "riskZeroAcc", no_accuracy: "riskNoAcc", impossible_travel: "riskTeleport", low_precision: "riskLowPrec", edge_of_fence: "riskEdge" };
   const riskCell = (risk) => {
     if (!risk || risk.level === "none" || !risk.reasons?.length) {
       return <span style={{ color: S.g300 }}>—</span>;

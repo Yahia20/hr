@@ -63,9 +63,14 @@ TZ_OFFSET_MINUTES = int(os.environ.get("ATTENDANCE_TZ_OFFSET_MINUTES", "180"))
 REQUIRE_BIOMETRIC = os.environ.get("ATTENDANCE_REQUIRE_BIOMETRIC", "true").lower() in ("1", "true", "yes")
 REQUIRE_GEOFENCE = os.environ.get("ATTENDANCE_REQUIRE_GEOFENCE", "true").lower() in ("1", "true", "yes")
 
-# GPS accuracy slack added to the geofence radius, capped so a wildly
-# inaccurate fix can't bypass the fence.
-MAX_ACCURACY_SLACK_M = 100.0
+# GPS accuracy slack added to the geofence radius. The client reports its own
+# accuracy, so this is attacker-controllable — keep the cap tight so it can't
+# meaningfully widen the fence, and flag any punch that leans on it (below).
+MAX_ACCURACY_SLACK_M = 50.0
+
+# A reported accuracy this coarse means the office match itself is uncertain —
+# a common tell of a punch made from just outside, or a faked accuracy value.
+LOW_PRECISION_M = 65.0
 
 # --- GPS spoof monitoring (advisory only — flags for HR review, never blocks).
 # Browser GPS practically never reports sub-metre accuracy; 0/near-0 is the
@@ -224,29 +229,39 @@ def _verify_clock_assertion(user: CurrentUser, assertion: Optional[dict]) -> boo
 # Geofence
 # ---------------------------------------------------------------------------
 
-def _check_geofence(payload: ClockActionIn) -> tuple[str, Optional[float]]:
-    """Returns (office_name, distance_m) of the nearest office. Raises 403 when
-    geofencing is enforced and the punch is outside every office radius."""
+def _check_geofence(payload: ClockActionIn) -> tuple[str, Optional[float], bool]:
+    """Returns (office_name, distance_m, edge) for the nearest office. `edge` is
+    True when the punch is outside every office's strict radius and only counted
+    as inside because of the accuracy slack — a signal worth flagging. Raises 403
+    when geofencing is enforced and the punch is outside even with slack."""
     with db() as conn:
         offices = conn.execute("SELECT * FROM office_locations").fetchall()
     if not offices:
-        return "", None
+        return "", None, False
     if payload.lat is None or payload.lng is None:
         if REQUIRE_GEOFENCE:
             raise HTTPException(400, "location_required")
-        return "", None
+        return "", None, False
 
-    nearest_name, nearest_dist, within = "", None, False
+    slack = min(payload.accuracy or 0.0, MAX_ACCURACY_SLACK_M)
+    nearest_name, nearest_dist = "", None
+    inside_strict = False   # within the radius on its own
+    inside_name = ""        # office matched (strict preferred, else slack)
     for o in offices:
         dist = _haversine_m(payload.lat, payload.lng, o["lat"], o["lng"])
         if nearest_dist is None or dist < nearest_dist:
             nearest_name, nearest_dist = o["name"], dist
-        slack = min(payload.accuracy or 0.0, MAX_ACCURACY_SLACK_M)
-        if dist <= o["radius_m"] + slack:
-            within = True
+        if dist <= o["radius_m"]:
+            inside_strict = True
+            inside_name = o["name"]
+        elif dist <= o["radius_m"] + slack and not inside_name:
+            inside_name = o["name"]
+
+    within = bool(inside_name)
     if REQUIRE_GEOFENCE and not within:
         raise HTTPException(403, f"outside_geofence:{round(nearest_dist)}")
-    return (nearest_name if within else ""), (round(nearest_dist, 1) if nearest_dist is not None else None)
+    edge = within and not inside_strict
+    return (inside_name, round(nearest_dist, 1) if nearest_dist is not None else None, edge)
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +429,7 @@ def clock_in(payload: ClockActionIn, request: Request, user: CurrentUser = Depen
 
     # Geofence first: it's read-only, so a location failure won't have consumed
     # the WebAuthn challenge or bumped the credential's sign counter.
-    office, distance = _check_geofence(payload)
+    office, distance, edge = _check_geofence(payload)
     verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
 
     try:
@@ -422,10 +437,10 @@ def clock_in(payload: ClockActionIn, request: Request, user: CurrentUser = Depen
             cur = conn.execute(
                 """INSERT INTO attendance
                    (user_id, work_date, clock_in_at, clock_in_lat, clock_in_lng, clock_in_accuracy,
-                    clock_in_office, clock_in_distance_m, clock_in_verified, clock_in_ip)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *""",
+                    clock_in_office, clock_in_distance_m, clock_in_verified, clock_in_ip, clock_in_edge)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *""",
                 (user.id, work_date, _fmt(now), payload.lat, payload.lng, payload.accuracy,
-                 office, distance, int(verified), client_ip(request)),
+                 office, distance, int(verified), client_ip(request), int(edge)),
             )
             return _without_ip(dict(cur.fetchone()))
     except sqlite3.IntegrityError:
@@ -442,7 +457,7 @@ def clock_out(payload: ClockActionIn, request: Request, user: CurrentUser = Depe
     if row is None:
         raise HTTPException(409, "not_clocked_in")
 
-    office, distance = _check_geofence(payload)
+    office, distance, edge = _check_geofence(payload)
     verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
 
     # Re-clocking out is allowed: the last punch of the day wins.
@@ -450,10 +465,11 @@ def clock_out(payload: ClockActionIn, request: Request, user: CurrentUser = Depe
         cur = conn.execute(
             """UPDATE attendance SET
                  clock_out_at = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_accuracy = ?,
-                 clock_out_office = ?, clock_out_distance_m = ?, clock_out_verified = ?, clock_out_ip = ?
+                 clock_out_office = ?, clock_out_distance_m = ?, clock_out_verified = ?, clock_out_ip = ?,
+                 clock_out_edge = ?
                WHERE id = ? RETURNING *""",
             (_fmt(now), payload.lat, payload.lng, payload.accuracy,
-             office, distance, int(verified), client_ip(request), row["id"]),
+             office, distance, int(verified), client_ip(request), int(edge), row["id"]),
         )
         return _without_ip(dict(cur.fetchone()))
 
@@ -487,6 +503,11 @@ def _risk(row: dict) -> dict:
             reasons.append("no_accuracy")
         elif acc <= SUSPICIOUS_ACCURACY_M:
             reasons.append("zero_accuracy")
+        elif acc >= LOW_PRECISION_M:
+            reasons.append("low_precision")
+        # Only counted as inside the office because of the accuracy slack.
+        if row.get(f"{side}_edge"):
+            reasons.append("edge_of_fence")
 
     have_both = all(
         row.get(k) is not None
@@ -508,7 +529,15 @@ def _risk(row: dict) -> dict:
 
     reasons = list(dict.fromkeys(reasons))  # de-dupe, keep order
     strong = {"zero_accuracy", "impossible_travel"}
-    level = "high" if strong.intersection(reasons) else ("low" if reasons else "none")
+    # "Beyond the fence AND coarse accuracy" together is the classic slack abuse.
+    if "edge_of_fence" in reasons and "low_precision" in reasons:
+        level = "high"
+    elif strong.intersection(reasons):
+        level = "high"
+    elif reasons:
+        level = "low"
+    else:
+        level = "none"
     return {"level": level, "reasons": reasons}
 
 
@@ -581,6 +610,8 @@ def list_attendance(
         # Don't reveal spoof flags to an employee viewing their own record.
         if user.role == ROLE_EMPLOYEE:
             r.pop("risk", None)
+            r.pop("clock_in_edge", None)
+            r.pop("clock_out_edge", None)
     return {"rows": rows, "total": total, "limit": limit, "offset": offset}
 
 
