@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from webauthn import (
@@ -38,6 +38,7 @@ from ..auth import (
     ROLE_HR_MANAGER,
     ROLE_HR_OFFICER,
     CurrentUser,
+    client_ip,
     require_role,
     require_user,
 )
@@ -65,6 +66,14 @@ REQUIRE_GEOFENCE = os.environ.get("ATTENDANCE_REQUIRE_GEOFENCE", "true").lower()
 # GPS accuracy slack added to the geofence radius, capped so a wildly
 # inaccurate fix can't bypass the fence.
 MAX_ACCURACY_SLACK_M = 100.0
+
+# --- GPS spoof monitoring (advisory only — flags for HR review, never blocks).
+# Browser GPS practically never reports sub-metre accuracy; 0/near-0 is the
+# tell-tale of a DevTools override or a fake-GPS app.
+SUSPICIOUS_ACCURACY_M = 1.0
+# Straight-line speed between the in and out punches above which the movement
+# is physically implausible (spoofed location on one of the two punches).
+MAX_PLAUSIBLE_KMH = 300.0
 
 CHALLENGE_MINUTES = 5
 RP_NAME = "Travel Gate HR"
@@ -382,15 +391,21 @@ def my_status(user: CurrentUser = Depends(require_user)):
         offices = conn.execute("SELECT COUNT(*) FROM office_locations").fetchone()[0]
     return {
         "work_date": work_date,
-        "today": dict(today) if today else None,
+        "today": _without_ip(dict(today)) if today else None,
         "has_credential": bool(_user_credentials(user.id)),
         "require_biometric": REQUIRE_BIOMETRIC,
         "require_geofence": REQUIRE_GEOFENCE and offices > 0,
     }
 
 
+def _without_ip(row: dict) -> dict:
+    row.pop("clock_in_ip", None)
+    row.pop("clock_out_ip", None)
+    return row
+
+
 @router.post("/clock-in", status_code=201)
-def clock_in(payload: ClockActionIn, user: CurrentUser = Depends(require_user)):
+def clock_in(payload: ClockActionIn, request: Request, user: CurrentUser = Depends(require_user)):
     now = _utcnow()
     work_date = _work_date(now)
     with db() as conn:
@@ -407,19 +422,19 @@ def clock_in(payload: ClockActionIn, user: CurrentUser = Depends(require_user)):
             cur = conn.execute(
                 """INSERT INTO attendance
                    (user_id, work_date, clock_in_at, clock_in_lat, clock_in_lng, clock_in_accuracy,
-                    clock_in_office, clock_in_distance_m, clock_in_verified)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *""",
+                    clock_in_office, clock_in_distance_m, clock_in_verified, clock_in_ip)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *""",
                 (user.id, work_date, _fmt(now), payload.lat, payload.lng, payload.accuracy,
-                 office, distance, int(verified)),
+                 office, distance, int(verified), client_ip(request)),
             )
-            return dict(cur.fetchone())
+            return _without_ip(dict(cur.fetchone()))
     except sqlite3.IntegrityError:
         # two punches raced past the existence check; UNIQUE(user_id, work_date) wins
         raise HTTPException(409, "already_clocked_in")
 
 
 @router.post("/clock-out")
-def clock_out(payload: ClockActionIn, user: CurrentUser = Depends(require_user)):
+def clock_out(payload: ClockActionIn, request: Request, user: CurrentUser = Depends(require_user)):
     now = _utcnow()
     work_date = _work_date(now)
     with db() as conn:
@@ -435,12 +450,12 @@ def clock_out(payload: ClockActionIn, user: CurrentUser = Depends(require_user))
         cur = conn.execute(
             """UPDATE attendance SET
                  clock_out_at = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_accuracy = ?,
-                 clock_out_office = ?, clock_out_distance_m = ?, clock_out_verified = ?
+                 clock_out_office = ?, clock_out_distance_m = ?, clock_out_verified = ?, clock_out_ip = ?
                WHERE id = ? RETURNING *""",
             (_fmt(now), payload.lat, payload.lng, payload.accuracy,
-             office, distance, int(verified), row["id"]),
+             office, distance, int(verified), client_ip(request), row["id"]),
         )
-        return dict(cur.fetchone())
+        return _without_ip(dict(cur.fetchone()))
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +471,45 @@ def _worked_hours(row: dict) -> Optional[float]:
     except (ValueError, TypeError):
         return None
     return round(max((t_out - t_in).total_seconds(), 0) / 3600, 2)
+
+
+def _risk(row: dict) -> dict:
+    """Advisory GPS-spoof signals for a punch, for HR to review. Never blocks —
+    location is client-supplied and can't be trusted absolutely; these are just
+    tell-tales worth a second look. Returns {level, reasons[]}."""
+    reasons: list[str] = []
+    for side in ("clock_in", "clock_out"):
+        lat, lng = row.get(f"{side}_lat"), row.get(f"{side}_lng")
+        acc = row.get(f"{side}_accuracy")
+        if lat is None or lng is None:
+            continue
+        if acc is None:
+            reasons.append("no_accuracy")
+        elif acc <= SUSPICIOUS_ACCURACY_M:
+            reasons.append("zero_accuracy")
+
+    have_both = all(
+        row.get(k) is not None
+        for k in ("clock_in_lat", "clock_in_lng", "clock_out_lat", "clock_out_lng", "clock_out_at")
+    )
+    if have_both:
+        try:
+            t_in = datetime.strptime(row["clock_in_at"], "%Y-%m-%d %H:%M:%S")
+            t_out = datetime.strptime(row["clock_out_at"], "%Y-%m-%d %H:%M:%S")
+            hours = (t_out - t_in).total_seconds() / 3600
+            dist_km = _haversine_m(
+                row["clock_in_lat"], row["clock_in_lng"],
+                row["clock_out_lat"], row["clock_out_lng"],
+            ) / 1000
+            if (hours > 0 and dist_km / hours > MAX_PLAUSIBLE_KMH) or (hours <= 0 and dist_km > 1):
+                reasons.append("impossible_travel")
+        except (ValueError, TypeError):
+            pass
+
+    reasons = list(dict.fromkeys(reasons))  # de-dupe, keep order
+    strong = {"zero_accuracy", "impossible_travel"}
+    level = "high" if strong.intersection(reasons) else ("low" if reasons else "none")
+    return {"level": level, "reasons": reasons}
 
 
 MAX_PAGE_SIZE = 200
@@ -500,6 +554,7 @@ def _fetch_records(where: str, params: list, limit: Optional[int] = None, offset
         rows = [dict(r) for r in conn.execute(sql, q_params).fetchall()]
     for r in rows:
         r["worked_hours"] = _worked_hours(r)
+        r["risk"] = _risk(r)
     return rows
 
 
@@ -519,6 +574,13 @@ def list_attendance(
             params,
         ).fetchone()[0]
     rows = _fetch_records(where, params, limit=limit, offset=offset)
+    for r in rows:
+        # IPs are audit data — kept for the HR-only export, not the list UI.
+        r.pop("clock_in_ip", None)
+        r.pop("clock_out_ip", None)
+        # Don't reveal spoof flags to an employee viewing their own record.
+        if user.role == ROLE_EMPLOYEE:
+            r.pop("risk", None)
     return {"rows": rows, "total": total, "limit": limit, "offset": offset}
 
 
@@ -547,8 +609,10 @@ def export_attendance(
     ws.append([
         "Date", "Employee", "Email", "Department", "Clock In", "Clock Out",
         "Hours", "Office (In)", "Office (Out)", "Fingerprint In", "Fingerprint Out",
+        "Risk", "Risk Reasons", "IP (In)", "IP (Out)",
     ])
     for r in rows:
+        risk = r.get("risk") or {"level": "none", "reasons": []}
         ws.append([
             r["work_date"], _xlsx_safe(r["name"]), _xlsx_safe(r["email"]), _xlsx_safe(r["department"]),
             local(r["clock_in_at"]), local(r["clock_out_at"]),
@@ -556,6 +620,8 @@ def export_attendance(
             _xlsx_safe(r["clock_in_office"]), _xlsx_safe(r["clock_out_office"]),
             "yes" if r["clock_in_verified"] else "no",
             "yes" if r["clock_out_verified"] else "no",
+            risk["level"], ", ".join(risk["reasons"]),
+            _xlsx_safe(r.get("clock_in_ip", "")), _xlsx_safe(r.get("clock_out_ip", "")),
         ])
     buf = io.BytesIO()
     wb.save(buf)
