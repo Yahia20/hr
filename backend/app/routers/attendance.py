@@ -72,6 +72,12 @@ MAX_ACCURACY_SLACK_M = 50.0
 # a common tell of a punch made from just outside, or a faked accuracy value.
 LOW_PRECISION_M = 65.0
 
+# Data-minimisation (PDPL): raw GPS coordinates and request IPs are precise
+# location data, so they're scrubbed from attendance rows older than this many
+# days. The derived facts HR actually needs — matched office, distance, verified
+# flags, edge markers, times — are kept indefinitely. 0 disables the purge.
+RETENTION_DAYS = int(os.environ.get("ATTENDANCE_RETENTION_DAYS", "90"))
+
 # --- GPS spoof monitoring (advisory only — flags for HR review, never blocks).
 # Browser GPS practically never reports sub-metre accuracy; 0/near-0 is the
 # tell-tale of a DevTools override or a fake-GPS app.
@@ -419,8 +425,47 @@ def _without_ip(row: dict) -> dict:
     return row
 
 
+_last_purge: dict = {"at": None}
+
+
+def purge_location_data(retention_days: Optional[int] = None) -> int:
+    """Scrub raw GPS coordinates/accuracy and request IPs from attendance rows
+    older than the retention window, keeping the derived audit facts (office,
+    distance, verified, edge, times). Returns the number of rows scrubbed."""
+    days = RETENTION_DAYS if retention_days is None else retention_days
+    if days <= 0:
+        return 0
+    cutoff = (_utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    with db() as conn:
+        cur = conn.execute(
+            """UPDATE attendance SET
+                 clock_in_lat = NULL, clock_in_lng = NULL, clock_in_accuracy = NULL, clock_in_ip = '',
+                 clock_out_lat = NULL, clock_out_lng = NULL, clock_out_accuracy = NULL, clock_out_ip = ''
+               WHERE work_date < ?
+                 AND (clock_in_lat IS NOT NULL OR clock_out_lat IS NOT NULL
+                      OR clock_in_ip != '' OR clock_out_ip != '')""",
+            (cutoff,),
+        )
+        return cur.rowcount
+
+
+def _maybe_purge() -> None:
+    """Opportunistic retention sweep, throttled to once an hour per process so a
+    long-running instance still purges without a separate scheduler."""
+    now = _utcnow()
+    last = _last_purge["at"]
+    if last is not None and (now - last).total_seconds() < 3600:
+        return
+    _last_purge["at"] = now
+    try:
+        purge_location_data()
+    except Exception:  # a purge failure must never break a clock action
+        logger.exception("attendance location purge failed")
+
+
 @router.post("/clock-in", status_code=201)
 def clock_in(payload: ClockActionIn, request: Request, user: CurrentUser = Depends(require_user)):
+    _maybe_purge()
     now = _utcnow()
     work_date = _work_date(now)
     with db() as conn:
