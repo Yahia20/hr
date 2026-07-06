@@ -3,12 +3,21 @@ office CRUD, WebAuthn ceremony error paths, listing scope, pagination, export).
 
 The real WebAuthn success path needs a physical authenticator, so biometric
 verification is exercised up to the ceremony/registration boundary only."""
+import io
+
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from app.main import app
 from conftest import csrf
 
 RIYADH = (24.7136, 46.6753)
+CAIRO = (30.0444, 31.2357)
+
+
+def _admin_row(admin, email):
+    body = admin.get(f"/api/attendance?employee={email}").json()
+    return body["rows"][0] if body["rows"] else None
 
 
 def test_me_initial(new_employee):
@@ -144,3 +153,48 @@ def test_auth_required():
     anon = TestClient(app)
     assert anon.get("/api/attendance").status_code == 401
     assert anon.post("/api/attendance/clock-in", json={}).status_code == 401
+
+
+def test_risk_zero_accuracy_flagged(admin, new_employee):
+    emp, email = new_employee()
+    r = emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 0}, headers=csrf(emp))
+    assert r.status_code == 201
+    row = _admin_row(admin, email)
+    assert row["risk"]["level"] == "high"
+    assert "zero_accuracy" in row["risk"]["reasons"]
+
+
+def test_risk_impossible_travel_flagged(admin, new_employee):
+    emp, email = new_employee()
+    # Clock in in Riyadh and out in Cairo seconds later — physically impossible.
+    emp.post("/api/attendance/clock-in", json={"lat": RIYADH[0], "lng": RIYADH[1], "accuracy": 20}, headers=csrf(emp))
+    emp.post("/api/attendance/clock-out", json={"lat": CAIRO[0], "lng": CAIRO[1], "accuracy": 20}, headers=csrf(emp))
+    row = _admin_row(admin, email)
+    assert row["risk"]["level"] == "high"
+    assert "impossible_travel" in row["risk"]["reasons"]
+
+
+def test_risk_clean_when_plausible(admin, new_employee):
+    emp, email = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 22}, headers=csrf(emp))
+    row = _admin_row(admin, email)
+    assert row["risk"]["level"] == "none" and row["risk"]["reasons"] == []
+
+
+def test_risk_hidden_from_employee_and_ip_not_leaked(new_employee):
+    emp, _ = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 0}, headers=csrf(emp))
+    row = emp.get("/api/attendance").json()["rows"][0]
+    assert "risk" not in row  # spoof flags not revealed to the employee
+    assert "clock_in_ip" not in row  # IP is audit-only, never in the list UI
+
+
+def test_export_has_risk_and_ip_columns(admin, new_employee):
+    emp, _ = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 5}, headers=csrf(emp))
+    r = admin.get("/api/attendance/export")
+    assert r.status_code == 200
+    ws = load_workbook(io.BytesIO(r.content)).active
+    headers = [c.value for c in ws[1]]
+    for col in ("Risk", "Risk Reasons", "IP (In)", "IP (Out)"):
+        assert col in headers

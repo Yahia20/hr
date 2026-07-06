@@ -199,9 +199,23 @@ export default function Attendance({ lang, user }) {
     from: total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
     to: Math.min(page * PAGE_SIZE, total),
   };
-  const cols = isEmployee ? 6 : 7;
+  const cols = isEmployee ? 6 : 8;
   // Clamp back onto a valid page if the result set shrank (e.g. after filtering).
   useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
+
+  const RISK_LABEL = { zero_accuracy: "riskZeroAcc", no_accuracy: "riskNoAcc", impossible_travel: "riskTeleport" };
+  const riskCell = (risk) => {
+    if (!risk || risk.level === "none" || !risk.reasons?.length) {
+      return <span style={{ color: S.g300 }}>—</span>;
+    }
+    const high = risk.level === "high";
+    const title = risk.reasons.map((r) => t(RISK_LABEL[r] || r)).join(" · ");
+    return (
+      <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 999, fontSize: 11, fontWeight: 600, background: high ? S.errL : S.warnL, color: high ? S.err : S.warn, border: `1px solid ${high ? "rgba(220,38,38,.2)" : "rgba(217,119,6,.2)"}` }}>
+        {IC.warn2} {t(RISK_LABEL[risk.reasons[0]] || risk.reasons[0])}{risk.reasons.length > 1 ? ` +${risk.reasons.length - 1}` : ""}
+      </span>
+    );
+  };
 
   const chip = (label, value, on) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "10px 16px", borderRadius: S.r2, background: on ? S.okL : S.g50, border: `1px solid ${on ? "transparent" : S.g100}`, minWidth: 110 }}>
@@ -329,7 +343,10 @@ export default function Attendance({ lang, user }) {
       {/* History */}
       <Card flush>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, padding: "16px 16px 0" }}>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, margin: 0 }}>{t("attHistory")}</h3>
+          <div>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, margin: 0 }}>{t("attHistory")}</h3>
+            {!isEmployee && <p style={{ fontSize: 11.5, color: S.g400, margin: "3px 0 0", maxWidth: 460 }}>{t("riskHint")}</p>}
+          </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {!isEmployee && (
               <input style={{ ...inp, width: 160, padding: "8px 12px" }} placeholder={t("employee")} value={filters.employee} onChange={(e) => setFilters({ ...filters, employee: e.target.value })} />
@@ -342,7 +359,7 @@ export default function Attendance({ lang, user }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr>
-                {[t("date"), ...(isEmployee ? [] : [t("employee")]), t("timeIn"), t("timeOut"), t("hours"), t("office"), t("fingerprint")].map((h) => (
+                {[t("date"), ...(isEmployee ? [] : [t("employee")]), t("timeIn"), t("timeOut"), t("hours"), t("office"), t("fingerprint"), ...(isEmployee ? [] : [t("riskFlag")])].map((h) => (
                   <Th key={h} ar={ar}>{h}</Th>
                 ))}
               </tr>
@@ -361,6 +378,7 @@ export default function Attendance({ lang, user }) {
                   <td style={{ padding: "12px 16px", color: S.g600, fontVariantNumeric: "tabular-nums" }}>{r.worked_hours ?? "—"}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{r.clock_in_office || r.clock_out_office || "—"}</td>
                   <td style={{ padding: "12px 16px", color: r.clock_in_verified ? S.ok : S.g400 }}>{r.clock_in_verified ? "✓" : "—"}</td>
+                  {!isEmployee && <td style={{ padding: "12px 16px" }}>{riskCell(r.risk)}</td>}
                 </tr>
               ))}
             </tbody>

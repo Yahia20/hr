@@ -70,7 +70,7 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `users` — email (unique), name, role (hr_manager/hr_officer/dept_head/employee), department, bcrypt password_hash, is_active, lockout columns
 - `sessions` — SHA-256 of the session cookie token, user_id, csrf_token, expires_at
 - `password_resets` — SHA-256 of the reset token, user_id, expires_at, used
-- `attendance` — one row per user per work day: user_id, work_date, clock_in/out timestamps (UTC), GPS lat/lng/accuracy, matched office, distance, verified flags
+- `attendance` — one row per user per work day: user_id, work_date, clock_in/out timestamps (UTC), GPS lat/lng/accuracy, matched office, distance, verified flags, request IP (in/out, audit-only). List responses add an advisory `risk` field (spoof signals: unrealistic accuracy, missing accuracy, impossible travel) computed at read time; the IP and `risk` are HR-only (never returned to the employee's own view)
 - `office_locations` — geofence anchors (name, lat, lng, radius_m) that punches must fall inside
 - `webauthn_credentials` — per-user device fingerprint credentials (credential_id, public_key base64url, sign_count)
 - `webauthn_challenges` — short-lived WebAuthn challenges (one per user per purpose)

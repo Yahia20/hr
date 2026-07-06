@@ -174,5 +174,20 @@ def init_db() -> None:
                 ON permissions (employee_name, month_key);
             """
         )
+        # Lightweight additive migrations for columns added to existing tables
+        # (CREATE TABLE IF NOT EXISTS never alters an already-created table).
+        _ensure_columns(raw, "attendance", {
+            "clock_in_ip": "TEXT NOT NULL DEFAULT ''",
+            "clock_out_ip": "TEXT NOT NULL DEFAULT ''",
+        })
+        raw.commit()
     finally:
         raw.close()
+
+
+def _ensure_columns(conn, table: str, columns: dict[str, str]) -> None:
+    """Idempotently ADD COLUMN for any of `columns` missing from `table`."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, ddl in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
