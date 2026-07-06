@@ -90,6 +90,12 @@ export const api = {
   waClockBegin: () => req("/attendance/webauthn/clock/begin", { method: "POST" }),
   listWaCredentials: () => req("/attendance/webauthn/credentials"),
   deleteWaCredential: (id) => req(`/attendance/webauthn/credentials/${id}`, { method: "DELETE" }),
+
+  // Early-leave permissions (استئذان)
+  listPermissions: (month) => req(`/permissions${month ? `?month=${month}` : ""}`),
+  createPermission: (data) => req("/permissions", { method: "POST", body: JSON.stringify(data) }),
+  deletePermission: (id) => req(`/permissions/${id}`, { method: "DELETE" }),
+  permissionAttachment: (id) => req(`/permissions/${id}/attachment`),
 };
 
 async function downloadXlsx(path, filters, prefix) {

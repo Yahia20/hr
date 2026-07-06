@@ -153,6 +153,25 @@ def init_db() -> None:
                 expires_at TEXT    NOT NULL,
                 PRIMARY KEY (user_id, purpose)
             );
+
+            -- Early-leave permissions (استئذان): each employee gets a small
+            -- monthly quota. month_key (YYYY-MM) drives the per-month allowance;
+            -- attachment (base64) holds the supporting paper and is HR-manager
+            -- only. One row per granted permission.
+            CREATE TABLE IF NOT EXISTS permissions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                employee_name   TEXT    NOT NULL,
+                permission_date TEXT    NOT NULL,
+                month_key       TEXT    NOT NULL,
+                note            TEXT    NOT NULL DEFAULT '',
+                attachment      TEXT    NOT NULL DEFAULT '',
+                attachment_name TEXT    NOT NULL DEFAULT '',
+                attachment_mime TEXT    NOT NULL DEFAULT '',
+                created_by      TEXT    NOT NULL DEFAULT '',
+                created_at      TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_permissions_emp_month
+                ON permissions (employee_name, month_key);
             """
         )
     finally:

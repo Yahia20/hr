@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .auth import bootstrap_admin
 from .db import init_db
 from .routers import auth as auth_router
-from .routers import attendance, employees, matrix, settings, stats, violations
+from .routers import attendance, employees, matrix, permissions, settings, stats, violations
 
 logger = logging.getLogger("hr")
 
@@ -64,6 +64,7 @@ app.include_router(stats.router, prefix="/api")
 app.include_router(matrix.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(attendance.router, prefix="/api")
+app.include_router(permissions.router, prefix="/api")
 
 
 # Serve the built React SPA from the same origin as the API. The frontend talks
