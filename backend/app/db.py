@@ -179,6 +179,8 @@ def init_db() -> None:
         _ensure_columns(raw, "attendance", {
             "clock_in_ip": "TEXT NOT NULL DEFAULT ''",
             "clock_out_ip": "TEXT NOT NULL DEFAULT ''",
+            "clock_in_edge": "INTEGER NOT NULL DEFAULT 0",
+            "clock_out_edge": "INTEGER NOT NULL DEFAULT 0",
         })
         raw.commit()
     finally:

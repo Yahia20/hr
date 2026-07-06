@@ -111,6 +111,7 @@ export const L = {
     riskFlag: "Flag", riskOk: "OK",
     riskZeroAcc: "Unrealistic GPS accuracy", riskNoAcc: "Location without accuracy",
     riskTeleport: "Impossible travel between punches",
+    riskLowPrec: "Coarse GPS accuracy", riskEdge: "Only inside on accuracy margin",
     riskHint: "Location is self-reported by the device and can be spoofed. Flagged punches are for review, not proof.",
     // permissions (early leave / استئذان)
     perm: "Permissions",
@@ -270,6 +271,7 @@ export const L = {
     riskFlag: "\u062A\u0646\u0628\u064A\u0647", riskOk: "\u0633\u0644\u064A\u0645",
     riskZeroAcc: "\u062F\u0642\u0629 \u0645\u0648\u0642\u0639 \u063A\u064A\u0631 \u0648\u0627\u0642\u0639\u064A\u0629", riskNoAcc: "\u0645\u0648\u0642\u0639 \u0628\u062F\u0648\u0646 \u062F\u0642\u0629",
     riskTeleport: "\u062A\u0646\u0642\u0651\u0644 \u063A\u064A\u0631 \u0645\u0646\u0637\u0642\u064A \u0628\u064A\u0646 \u0627\u0644\u062D\u0636\u0648\u0631 \u0648\u0627\u0644\u0627\u0646\u0635\u0631\u0627\u0641",
+    riskLowPrec: "\u062F\u0642\u0629 \u0645\u0648\u0642\u0639 \u0636\u0639\u064A\u0641\u0629", riskEdge: "\u062F\u062E\u0644 \u0628\u0641\u0636\u0644 \u0647\u0627\u0645\u0634 \u0627\u0644\u062F\u0642\u0629 \u0641\u0642\u0637",
     riskHint: "\u0627\u0644\u0645\u0648\u0642\u0639 \u0628\u064A\u062C\u064A \u0645\u0646 \u062C\u0647\u0627\u0632 \u0627\u0644\u0645\u0648\u0638\u0641 \u0648\u0645\u0645\u0643\u0646 \u064A\u062A\u0632\u0648\u0651\u0631. \u0627\u0644\u0646\u0628\u0636\u0627\u062A \u0627\u0644\u0645\u0639\u0644\u064E\u0651\u0645\u0629 \u0644\u0644\u0645\u0631\u0627\u062C\u0639\u0629\u060C \u0645\u0634 \u062F\u0644\u064A\u0644 \u0642\u0627\u0637\u0639.",
     // permissions (early leave / \u0627\u0633\u062A\u0626\u0630\u0627\u0646)
     perm: "\u0627\u0644\u0627\u0633\u062A\u0626\u0630\u0627\u0646\u0627\u062A",

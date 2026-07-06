@@ -15,10 +15,25 @@ from .routers import attendance, employees, matrix, permissions, settings, stats
 logger = logging.getLogger("hr")
 
 
+def _warn_insecure_attendance() -> None:
+    """Loudly flag a config that lets attendance be logged without proof of
+    identity (fingerprint) while running in production."""
+    is_prod = os.environ.get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+    biometric_on = os.environ.get("ATTENDANCE_REQUIRE_BIOMETRIC", "true").lower() in ("1", "true", "yes")
+    if is_prod and not biometric_on:
+        logger.warning(
+            "ATTENDANCE_REQUIRE_BIOMETRIC is disabled in production — attendance "
+            "can be clocked without fingerprint verification, so employees could "
+            "punch in for one another. Set ATTENDANCE_REQUIRE_BIOMETRIC=true unless "
+            "this is deliberate."
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
     bootstrap_admin()
+    _warn_insecure_attendance()
     yield
 
 

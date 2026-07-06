@@ -181,6 +181,62 @@ def test_risk_clean_when_plausible(admin, new_employee):
     assert row["risk"]["level"] == "none" and row["risk"]["reasons"] == []
 
 
+def _hq(admin, radius=150):
+    admin.post(
+        "/api/attendance/offices",
+        json={"name": "HQ", "lat": RIYADH[0], "lng": RIYADH[1], "radius_m": radius},
+        headers=csrf(admin),
+    )
+
+
+def test_slack_cannot_widen_fence_far(admin, new_employee):
+    # ~240m from a 150m office claiming accuracy=100: slack is capped at 50, so
+    # the effective fence is 200m and the punch must be rejected, not accepted.
+    _hq(admin)
+    emp, _ = new_employee()
+    r = emp.post(
+        "/api/attendance/clock-in",
+        json={"lat": RIYADH[0] + 0.00216, "lng": RIYADH[1], "accuracy": 100},
+        headers=csrf(emp),
+    )
+    assert r.status_code == 403 and r.json()["detail"].startswith("outside_geofence:")
+
+
+def test_edge_of_fence_is_flagged(admin, new_employee):
+    # Just outside the 150m radius but inside radius+slack -> accepted BUT flagged.
+    _hq(admin)
+    emp, email = new_employee()
+    r = emp.post(
+        "/api/attendance/clock-in",
+        json={"lat": RIYADH[0] + 0.00162, "lng": RIYADH[1], "accuracy": 40},  # ~180m out
+        headers=csrf(emp),
+    )
+    assert r.status_code == 201, r.text
+    row = _admin_row(admin, email)
+    assert "edge_of_fence" in row["risk"]["reasons"]
+    assert row["risk"]["level"] in ("low", "high")
+
+
+def test_solidly_inside_is_not_flagged(admin, new_employee):
+    _hq(admin)
+    emp, email = new_employee()
+    r = emp.post(
+        "/api/attendance/clock-in",
+        json={"lat": RIYADH[0] + 0.0003, "lng": RIYADH[1], "accuracy": 20},  # ~33m, well inside
+        headers=csrf(emp),
+    )
+    assert r.status_code == 201
+    row = _admin_row(admin, email)
+    assert "edge_of_fence" not in row["risk"]["reasons"]
+
+
+def test_low_precision_flagged(admin, new_employee):
+    emp, email = new_employee()  # no offices -> geofence not enforced
+    emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 80}, headers=csrf(emp))
+    row = _admin_row(admin, email)
+    assert "low_precision" in row["risk"]["reasons"]
+
+
 def test_risk_hidden_from_employee_and_ip_not_leaked(new_employee):
     emp, _ = new_employee()
     emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 0}, headers=csrf(emp))
