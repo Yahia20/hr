@@ -23,6 +23,7 @@ backend/
 │   ├── penalties.py         # penalty/escalation engine
 │   └── routers/            # API routes split by domain
 │       ├── auth.py          # login/logout/me, forgot/reset, user management
+│       ├── attendance.py    # clock in/out, geofence offices, WebAuthn fingerprint
 │       ├── employees.py
 │       ├── violations.py
 │       ├── stats.py
@@ -53,18 +54,26 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `GET /api/matrix` — rules matrix and penalty map (served from `penalties.py` in memory, not the DB)
 - `POST /api/auth/login|logout`, `GET /api/auth/me`, `POST /api/auth/forgot|reset` — cookie-session auth
 - `GET/POST /api/auth/users`, `DELETE /api/auth/users/{id}` — user management (HR Manager only)
+- `POST /api/attendance/clock-in|clock-out`, `GET /api/attendance/me` — GPS + fingerprint-verified attendance punches (any signed-in user)
+- `GET /api/attendance`, `GET /api/attendance/export` — attendance log (role-scoped) and Excel export (HR staff)
+- `GET/POST /api/attendance/offices`, `DELETE /api/attendance/offices/{id}` — geofence office locations (read: HR staff, write: HR Manager)
+- `POST /api/attendance/webauthn/register/begin|complete`, `POST /api/attendance/webauthn/clock/begin`, `GET/DELETE /api/attendance/webauthn/credentials` — WebAuthn (device fingerprint) enrolment and clock assertions
 - Auth is an httpOnly `hr_session` cookie + `X-CSRF-Token` header on mutations (double-submit `hr_csrf` cookie). Every endpoint declares role requirements via `require_user`/`require_role` from `auth.py`; `/health` and the login/forgot/reset endpoints are the only unguarded ones.
 - Roles: `hr_manager` (everything), `hr_officer` (log/manage, no deletes or user admin), `dept_head` (read-only, own department), `employee` (own violations only)
 
 ## Database tables
-`init_db()` in `db.py` creates five tables:
+`init_db()` in `db.py` creates nine tables:
 - `employees` — name (unique), email, department, manager_email
 - `violations` — employee_name, category, incident, penalty_color, penalty_label, deduction_hours, deduction_days, freeze_months, comment, submitted_by, proof_image (base64), created_at
 - `users` — email (unique), name, role (hr_manager/hr_officer/dept_head/employee), department, bcrypt password_hash, is_active, lockout columns
 - `sessions` — SHA-256 of the session cookie token, user_id, csrf_token, expires_at
 - `password_resets` — SHA-256 of the reset token, user_id, expires_at, used
+- `attendance` — one row per user per work day: user_id, work_date, clock_in/out timestamps (UTC), GPS lat/lng/accuracy, matched office, distance, verified flags
+- `office_locations` — geofence anchors (name, lat, lng, radius_m) that punches must fall inside
+- `webauthn_credentials` — per-user device fingerprint credentials (credential_id, public_key base64url, sign_count)
+- `webauthn_challenges` — short-lived WebAuthn challenges (one per user per purpose)
 
-There is no `rules` table: the rules matrix lives in `penalties.py`. The first HR Manager account is seeded from `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` when the `users` table is empty. Failed logins are rate-limited per IP and per account (5 per 15 min each). Other env vars: `COOKIE_SECURE` (set `true` in prod), `APP_BASE_URL` (reset links), `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `CORS_ORIGINS`, `HR_DB_FILE`.
+There is no `rules` table: the rules matrix lives in `penalties.py`. The first HR Manager account is seeded from `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` when the `users` table is empty. Failed logins are rate-limited per IP and per account (5 per 15 min each). Other env vars: `COOKIE_SECURE` (set `true` in prod), `APP_BASE_URL` (reset links + WebAuthn origin/RP ID), `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `CORS_ORIGINS`, `HR_DB_FILE`. Attendance env vars: `ATTENDANCE_REQUIRE_BIOMETRIC` / `ATTENDANCE_REQUIRE_GEOFENCE` (default `true`), `ATTENDANCE_TZ_OFFSET_MINUTES` (default `180`, KSA), `WEBAUTHN_RP_ID` (defaults to the `APP_BASE_URL` hostname). WebAuthn and geolocation both require HTTPS (or localhost).
 
 ## Known issues (being fixed)
 - [x] CORS wildcard `*` — now locked to an allow-list via `CORS_ORIGINS` env var

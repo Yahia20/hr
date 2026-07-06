@@ -67,20 +67,44 @@ export const api = {
   getSettings: () => req("/settings"),
   sendTestEmail: (to) => req("/settings/test-email", { method: "POST", body: JSON.stringify({ to: to || null }) }),
 
-  exportViolations: async (filters = {}) => {
+  exportViolations: async (filters = {}) => downloadXlsx("/violations/export", filters, "violations"),
+
+  // Attendance (clock in/out)
+  attMe: () => req("/attendance/me"),
+  clockIn: (data) => req("/attendance/clock-in", { method: "POST", body: JSON.stringify(data) }),
+  clockOut: (data) => req("/attendance/clock-out", { method: "POST", body: JSON.stringify(data) }),
+  listAttendance: (filters = {}) => {
     const qs = new URLSearchParams(
       Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")
     ).toString();
-    const res = await fetch(`${BASE}/violations/export${qs ? `?${qs}` : ""}`, { credentials: "same-origin" });
-    if (!res.ok) throw new Error(`${res.status}: export failed`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `violations_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    return req(`/attendance${qs ? `?${qs}` : ""}`);
   },
+  exportAttendance: (filters = {}) => downloadXlsx("/attendance/export", filters, "attendance"),
+
+  listOffices: () => req("/attendance/offices"),
+  createOffice: (data) => req("/attendance/offices", { method: "POST", body: JSON.stringify(data) }),
+  deleteOffice: (id) => req(`/attendance/offices/${id}`, { method: "DELETE" }),
+
+  waRegisterBegin: () => req("/attendance/webauthn/register/begin", { method: "POST" }),
+  waRegisterComplete: (data) => req("/attendance/webauthn/register/complete", { method: "POST", body: JSON.stringify(data) }),
+  waClockBegin: () => req("/attendance/webauthn/clock/begin", { method: "POST" }),
+  listWaCredentials: () => req("/attendance/webauthn/credentials"),
+  deleteWaCredential: (id) => req(`/attendance/webauthn/credentials/${id}`, { method: "DELETE" }),
 };
+
+async function downloadXlsx(path, filters, prefix) {
+  const qs = new URLSearchParams(
+    Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")
+  ).toString();
+  const res = await fetch(`${BASE}${path}${qs ? `?${qs}` : ""}`, { credentials: "same-origin" });
+  if (!res.ok) throw new Error(`${res.status}: export failed`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${prefix}_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

@@ -87,6 +87,36 @@ class UserOut(BaseModel):
     is_active: int = 1
 
 
+class OfficeIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+    radius_m: int = Field(150, ge=20, le=5000)
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        return v.strip()
+
+
+class Office(OfficeIn):
+    id: int
+
+
+class ClockActionIn(BaseModel):
+    lat: Optional[float] = Field(None, ge=-90, le=90)
+    lng: Optional[float] = Field(None, ge=-180, le=180)
+    accuracy: Optional[float] = Field(None, ge=0)
+    # WebAuthn assertion (navigator.credentials.get result, JSON-encoded by the
+    # client). Required when biometric verification is enabled.
+    assertion: Optional[dict] = None
+
+
+class WebAuthnRegisterIn(BaseModel):
+    credential: dict
+    device_label: str = Field("", max_length=120)
+
+
 class Violation(BaseModel):
     id: int
     employee_name: str

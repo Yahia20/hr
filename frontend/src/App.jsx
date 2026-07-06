@@ -10,6 +10,7 @@ import { Sidebar, Topbar } from "./layout";
 import ErrorBoundary from "./ErrorBoundary";
 import { useHotkeys, useLocalStorage, useMediaQuery } from "./hooks";
 import Dashboard from "./pages/Dashboard";
+import Attendance from "./pages/Attendance";
 import LogViolation from "./pages/LogViolation";
 import Employees from "./pages/Employees";
 import Reports from "./pages/Reports";
@@ -19,16 +20,16 @@ import Login from "./pages/Login";
 
 // Pages each role may open; the first entry is the role's landing page.
 const ROLE_PAGES = {
-  hr_manager: ["dash", "log", "emp", "rep", "users", "set"],
-  hr_officer: ["dash", "log", "emp", "rep"],
-  dept_head: ["rep", "emp"],
-  employee: ["rep"],
+  hr_manager: ["dash", "att", "log", "emp", "rep", "users", "set"],
+  hr_officer: ["dash", "att", "log", "emp", "rep"],
+  dept_head: ["rep", "att", "emp"],
+  employee: ["att", "rep"],
 };
 
-const NAV_ICONS = { dash: IC.dash, log: IC.log, emp: IC.emp, rep: IC.rep, users: IC.emp, set: IC.set };
+const NAV_ICONS = { dash: IC.dash, att: IC.att, log: IC.log, emp: IC.emp, rep: IC.rep, users: IC.emp, set: IC.set };
 
 // Single-key shortcuts (suppressed while typing in a field).
-const HOTKEY_PAGES = { d: "dash", n: "log", e: "emp", r: "rep" };
+const HOTKEY_PAGES = { d: "dash", a: "att", n: "log", e: "emp", r: "rep" };
 
 function readResetToken() {
   return new URLSearchParams(window.location.search).get("reset_token") || null;
@@ -111,6 +112,7 @@ export default function HRSystem() {
 
   const PAGES = {
     dash: <Dashboard lang={lang} user={user} onNewV={() => nav("log")} onViewAll={() => nav("rep")} />,
+    att: <Attendance lang={lang} user={user} />,
     log: <LogViolation lang={lang} user={user} />,
     emp: <Employees lang={lang} user={user} />,
     rep: <Reports lang={lang} user={user} />,
@@ -126,7 +128,7 @@ export default function HRSystem() {
   }
 
   const shortcuts = [
-    ...Object.entries(HOTKEY_PAGES).filter(([, pg]) => allowed.includes(pg)).map(([k, pg]) => [k, { dash: "scDash", log: "scLog", emp: "scEmp", rep: "scRep" }[pg]]),
+    ...Object.entries(HOTKEY_PAGES).filter(([, pg]) => allowed.includes(pg)).map(([k, pg]) => [k, { dash: "scDash", att: "scAtt", log: "scLog", emp: "scEmp", rep: "scRep" }[pg]]),
     ["/", "scSearch"],
     ["?", "scHelp"],
   ];
