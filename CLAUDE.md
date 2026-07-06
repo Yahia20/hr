@@ -24,6 +24,7 @@ backend/
 │   └── routers/            # API routes split by domain
 │       ├── auth.py          # login/logout/me, forgot/reset, user management
 │       ├── attendance.py    # clock in/out, geofence offices, WebAuthn fingerprint
+│       ├── permissions.py   # early-leave permissions (استئذان) + attachments
 │       ├── employees.py
 │       ├── violations.py
 │       ├── stats.py
@@ -55,14 +56,15 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `POST /api/auth/login|logout`, `GET /api/auth/me`, `POST /api/auth/forgot|reset` — cookie-session auth
 - `GET/POST /api/auth/users`, `DELETE /api/auth/users/{id}` — user management (HR Manager only)
 - `POST /api/attendance/clock-in|clock-out`, `GET /api/attendance/me` — GPS + fingerprint-verified attendance punches (any signed-in user)
-- `GET /api/attendance`, `GET /api/attendance/export` — attendance log (role-scoped) and Excel export (HR staff)
+- `GET /api/attendance`, `GET /api/attendance/export` — attendance log (role-scoped; list is paginated via `limit`/`offset` and returns `{rows, total, limit, offset}`) and Excel export (HR staff)
 - `GET/POST /api/attendance/offices`, `DELETE /api/attendance/offices/{id}` — geofence office locations (read: HR staff, write: HR Manager)
 - `POST /api/attendance/webauthn/register/begin|complete`, `POST /api/attendance/webauthn/clock/begin`, `GET/DELETE /api/attendance/webauthn/credentials` — WebAuthn (device fingerprint) enrolment and clock assertions
+- `GET/POST /api/permissions`, `DELETE /api/permissions/{id}`, `GET /api/permissions/{id}/attachment` — early-leave permissions (استئذان): per-employee monthly quota (default 2, `PERMISSION_MONTHLY_QUOTA`); list/create for HR staff, delete + attachment view for HR Manager only
 - Auth is an httpOnly `hr_session` cookie + `X-CSRF-Token` header on mutations (double-submit `hr_csrf` cookie). Every endpoint declares role requirements via `require_user`/`require_role` from `auth.py`; `/health` and the login/forgot/reset endpoints are the only unguarded ones.
 - Roles: `hr_manager` (everything), `hr_officer` (log/manage, no deletes or user admin), `dept_head` (read-only, own department), `employee` (own violations only)
 
 ## Database tables
-`init_db()` in `db.py` creates nine tables:
+`init_db()` in `db.py` creates ten tables:
 - `employees` — name (unique), email, department, manager_email
 - `violations` — employee_name, category, incident, penalty_color, penalty_label, deduction_hours, deduction_days, freeze_months, comment, submitted_by, proof_image (base64), created_at
 - `users` — email (unique), name, role (hr_manager/hr_officer/dept_head/employee), department, bcrypt password_hash, is_active, lockout columns
@@ -72,6 +74,7 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `office_locations` — geofence anchors (name, lat, lng, radius_m) that punches must fall inside
 - `webauthn_credentials` — per-user device fingerprint credentials (credential_id, public_key base64url, sign_count)
 - `webauthn_challenges` — short-lived WebAuthn challenges (one per user per purpose)
+- `permissions` — early-leave permissions (استئذان): employee_name, permission_date, month_key (drives the monthly quota), note, attachment (base64, HR-manager only), created_by, created_at
 
 There is no `rules` table: the rules matrix lives in `penalties.py`. The first HR Manager account is seeded from `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` when the `users` table is empty. Failed logins are rate-limited per IP and per account (5 per 15 min each). Other env vars: `COOKIE_SECURE` (set `true` in prod), `APP_BASE_URL` (reset links + WebAuthn origin/RP ID), `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `CORS_ORIGINS`, `HR_DB_FILE`. Attendance env vars: `ATTENDANCE_REQUIRE_BIOMETRIC` / `ATTENDANCE_REQUIRE_GEOFENCE` (default `true`), `ATTENDANCE_TZ_OFFSET_MINUTES` (default `180`, KSA), `WEBAUTHN_RP_ID` (defaults to the `APP_BASE_URL` hostname). WebAuthn and geolocation both require HTTPS (or localhost).
 
@@ -90,6 +93,11 @@ There is no `rules` table: the rules matrix lives in `penalties.py`. The first H
 cd backend
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+
+# Backend tests (pytest)
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest -q
 
 # Docker
 docker-compose up --build

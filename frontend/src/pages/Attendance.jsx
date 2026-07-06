@@ -6,8 +6,10 @@ import { IC } from "../icons";
 import { Card, Empty, SkeletonRows, Pager, BtnPri, BtnSec, Th, FG, inp } from "../components";
 import { ConfirmModal } from "../modal";
 import { useToast } from "../toast";
-import { useDebouncedValue, usePagination } from "../hooks";
+import { useDebouncedValue } from "../hooks";
 import { getClockAssertion, getPosition, registerFingerprint, webauthnSupported } from "../webauthn";
+
+const PAGE_SIZE = 10;
 
 const utc = (s) => (s ? new Date(s.replace(" ", "T") + "Z") : null);
 const fmtTime = (s, ar) => {
@@ -50,6 +52,8 @@ export default function Attendance({ lang, user }) {
   const [me, setMe] = useState(null);
   const [creds, setCreds] = useState([]);
   const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [offices, setOffices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(null); // "in" | "out" | "fp" | "office"
@@ -70,8 +74,15 @@ export default function Attendance({ lang, user }) {
     setMe(await api.attMe());
     setCreds(await api.listWaCredentials());
   }
-  async function loadHistory() {
-    setRows(await api.listAttendance({ ...filters, employee: dqEmployee }));
+  async function loadHistory(p = page) {
+    const res = await api.listAttendance({
+      ...filters,
+      employee: dqEmployee,
+      limit: PAGE_SIZE,
+      offset: (p - 1) * PAGE_SIZE,
+    });
+    setRows(res.rows);
+    setTotal(res.total);
   }
   async function loadOffices() {
     if (isHR) setOffices(await api.listOffices());
@@ -81,12 +92,14 @@ export default function Attendance({ lang, user }) {
       .catch(() => toast("err", t("errGeneric")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Reset to the first page whenever the filters change.
+  useEffect(() => { setPage(1); }, [dqEmployee, filters.date_from, filters.date_to]);
   useEffect(() => {
-    loadHistory()
+    loadHistory(page)
       .catch(() => toast("err", t("errGeneric")))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dqEmployee, filters.date_from, filters.date_to]);
+  }, [dqEmployee, filters.date_from, filters.date_to, page]);
 
   async function punch(kind) {
     setBusy(kind);
@@ -180,8 +193,15 @@ export default function Attendance({ lang, user }) {
   const today = me?.today;
   const canIn = !today;
   const canOut = !!today;
-  const pg = usePagination(rows, 10);
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pager = {
+    page, pages, total, setPage,
+    from: total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1,
+    to: Math.min(page * PAGE_SIZE, total),
+  };
   const cols = isEmployee ? 6 : 7;
+  // Clamp back onto a valid page if the result set shrank (e.g. after filtering).
+  useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
 
   const chip = (label, value, on) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 3, padding: "10px 16px", borderRadius: S.r2, background: on ? S.okL : S.g50, border: `1px solid ${on ? "transparent" : S.g100}`, minWidth: 110 }}>
@@ -332,7 +352,7 @@ export default function Attendance({ lang, user }) {
                 <SkeletonRows rows={5} cols={cols} />
               ) : rows.length === 0 ? (
                 <tr><td colSpan={cols}><Empty text={t("noAtt")} /></td></tr>
-              ) : pg.slice.map((r) => (
+              ) : rows.map((r) => (
                 <tr key={r.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
                   <td style={{ padding: "12px 16px", color: S.g600, whiteSpace: "nowrap" }}>{r.work_date}</td>
                   {!isEmployee && <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{r.name}<small style={{ display: "block", color: S.g400, fontWeight: 400 }}>{r.department}</small></td>}
@@ -346,7 +366,7 @@ export default function Attendance({ lang, user }) {
             </tbody>
           </table>
         </div>
-        {!loading && <Pager {...pg} ar={ar} label={t("att")} />}
+        {!loading && <Pager {...pager} ar={ar} label={t("att")} />}
       </Card>
 
       <ConfirmModal

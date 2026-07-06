@@ -87,6 +87,48 @@ class UserOut(BaseModel):
     is_active: int = 1
 
 
+import re
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Attachments a manager may open inline; keep the allowlist tight.
+ALLOWED_ATTACHMENT_MIME = {"image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"}
+
+
+class PermissionIn(BaseModel):
+    employee_name: str = Field(..., min_length=1, max_length=120)
+    permission_date: str = Field(..., min_length=10, max_length=10)
+    note: str = Field("", max_length=500)
+    attachment: str = Field("", max_length=MAX_PROOF_B64_CHARS)
+    attachment_name: str = Field("", max_length=200)
+    attachment_mime: str = Field("", max_length=100)
+
+    @field_validator("permission_date")
+    @classmethod
+    def _valid_date(cls, v: str) -> str:
+        if not _DATE_RE.match(v):
+            raise ValueError("permission_date must be formatted YYYY-MM-DD")
+        return v
+
+    @field_validator("attachment")
+    @classmethod
+    def _valid_b64(cls, v: str) -> str:
+        if not v:
+            return v
+        try:
+            base64.b64decode(v, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("attachment must be valid base64")
+        return v
+
+    @field_validator("attachment_mime")
+    @classmethod
+    def _valid_mime(cls, v: str) -> str:
+        if v and v not in ALLOWED_ATTACHMENT_MIME:
+            raise ValueError("unsupported attachment type")
+        return v
+
+
 class OfficeIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     lat: float = Field(..., ge=-90, le=90)
