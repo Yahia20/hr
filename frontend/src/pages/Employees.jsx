@@ -8,13 +8,17 @@ import { ConfirmModal } from "../modal";
 import { useToast } from "../toast";
 import { useDebouncedValue, useFocusSearch, usePagination } from "../hooks";
 
-export default function Employees({ lang, user }) {
+export default function Employees({ lang, user, onGoPerm }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
   const isHR = user?.role === "hr_manager" || user?.role === "hr_officer";
   const canDelete = user?.role === "hr_manager";
+  // Extra columns beyond name/email/dept/manager: the permission indicator (HR
+  // staff) and the delete action (HR manager).
+  const colCount = 4 + (isHR ? 1 : 0) + (canDelete ? 1 : 0);
 
   const [list, setList] = useState([]);
+  const [perm, setPerm] = useState({ quota: 2, used: {} });
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", department: "", manager_email: "" });
@@ -29,7 +33,22 @@ export default function Employees({ lang, user }) {
   const dq = useDebouncedValue(search, 300);
 
   async function load() {
-    try { setList(await api.listEmployees()); } catch (e) { setErr(e.message); }
+    try {
+      setList(await api.listEmployees());
+      if (isHR) {
+        // Best-effort: the per-employee permission tally for the current month.
+        // A failure here must not blank out the employee list.
+        try {
+          const month = new Date().toISOString().slice(0, 7);
+          const p = await api.listPermissions(month);
+          const used = {};
+          for (const e of p.employees || []) used[e.employee_name] = e.used;
+          setPerm({ quota: p.quota ?? 2, used });
+        } catch { /* leave the indicator empty */ }
+      }
+    } catch (e) {
+      setErr(e.message);
+    }
     setLoading(false);
   }
   useEffect(() => { load(); }, []);
@@ -70,6 +89,20 @@ export default function Employees({ lang, user }) {
   ), [list, dq]);
   const pg = usePagination(filtered, 10);
 
+  // Used/quota dots for one employee's early-leave permissions this month,
+  // matching the Permissions page so the two views read the same.
+  const slots = (used) => {
+    const q = perm.quota || 2;
+    return (
+      <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+        {Array.from({ length: q }).map((_, i) => (
+          <span key={i} style={{ width: 9, height: 9, borderRadius: "50%", background: i < used ? S.warn : S.g200, display: "inline-block" }} />
+        ))}
+        <span style={{ fontSize: 12, color: S.g500, marginInlineStart: 4 }}>{used}/{q}</span>
+      </span>
+    );
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -106,18 +139,29 @@ export default function Employees({ lang, user }) {
       <Card flush>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr>{[t("name"), t("email"), t("dept"), t("mgrEmail"), ...(canDelete ? [t("act")] : [])].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
+            <thead><tr>{[t("name"), t("email"), t("dept"), t("mgrEmail"), ...(isHR ? [t("slotsLabel")] : []), ...(canDelete ? [t("act")] : [])].map((h) => <Th key={h} ar={ar}>{h}</Th>)}</tr></thead>
             <tbody>
               {loading ? (
-                <SkeletonRows rows={5} cols={canDelete ? 5 : 4} />
+                <SkeletonRows rows={5} cols={colCount} />
               ) : filtered.length === 0 ? (
-                <tr><td colSpan={canDelete ? 5 : 4}><Empty text={t("noEmp")} sub={isHR ? t("addEmpHint") : undefined} /></td></tr>
+                <tr><td colSpan={colCount}><Empty text={t("noEmp")} sub={isHR ? t("addEmpHint") : undefined} /></td></tr>
               ) : pg.slice.map((e) => (
                 <tr key={e.id} style={{ borderBottom: `1px solid ${S.g100}` }}>
                   <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{e.name}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.email}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.department}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{e.manager_email}</td>
+                  {isHR && (
+                    <td style={{ padding: "12px 16px" }}>
+                      <button
+                        onClick={() => onGoPerm && onGoPerm()}
+                        title={t("scPerm")}
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, cursor: onGoPerm ? "pointer" : "default", fontFamily: "inherit" }}
+                      >
+                        {slots(perm.used[e.name] || 0)}
+                      </button>
+                    </td>
+                  )}
                   {canDelete && (
                     <td style={{ padding: "12px 16px" }}>
                       <button onClick={() => setConfirmName(e.name)} style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>

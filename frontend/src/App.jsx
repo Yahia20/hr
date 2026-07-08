@@ -116,7 +116,7 @@ export default function HRSystem() {
     att: <Attendance lang={lang} user={user} />,
     perm: <Permissions lang={lang} user={user} />,
     log: <LogViolation lang={lang} user={user} />,
-    emp: <Employees lang={lang} user={user} />,
+    emp: <Employees lang={lang} user={user} onGoPerm={allowed.includes("perm") ? () => nav("perm") : undefined} />,
     rep: <Reports lang={lang} user={user} />,
     users: <Users lang={lang} user={user} />,
     set: <Settings lang={lang} user={user} dark={dark} onToggleDark={toggleDark} onToggleLang={toggleLang} />,
