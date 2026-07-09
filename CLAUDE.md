@@ -58,20 +58,22 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `POST /api/attendance/clock-in|clock-out`, `GET /api/attendance/me` — GPS + fingerprint-verified attendance punches (any signed-in user)
 - `GET /api/attendance`, `GET /api/attendance/export` — attendance log (role-scoped; list is paginated via `limit`/`offset` and returns `{rows, total, limit, offset}`) and Excel export (HR staff)
 - `GET/POST /api/attendance/offices`, `DELETE /api/attendance/offices/{id}` — geofence office locations (read: HR staff, write: HR Manager)
+- `GET/POST /api/attendance/networks`, `DELETE /api/attendance/networks/{id}`, `GET /api/attendance/my-ip` — office network IP/CIDR allow-list (Wi-Fi egress IP) for the advisory `off_network` flag; read + `my-ip`: HR staff, write: HR Manager
 - `POST /api/attendance/webauthn/register/begin|complete`, `POST /api/attendance/webauthn/clock/begin`, `GET/DELETE /api/attendance/webauthn/credentials` — WebAuthn (device fingerprint) enrolment and clock assertions
 - `GET/POST /api/permissions`, `DELETE /api/permissions/{id}`, `GET /api/permissions/{id}/attachment` — early-leave permissions (استئذان): per-employee monthly quota (default 2, `PERMISSION_MONTHLY_QUOTA`); list/create for HR staff, delete + attachment view for HR Manager only
 - Auth is an httpOnly `hr_session` cookie + `X-CSRF-Token` header on mutations (double-submit `hr_csrf` cookie). Every endpoint declares role requirements via `require_user`/`require_role` from `auth.py`; `/health` and the login/forgot/reset endpoints are the only unguarded ones.
 - Roles: `hr_manager` (everything), `hr_officer` (log/manage, no deletes or user admin), `dept_head` (read-only, own department), `employee` (own violations only)
 
 ## Database tables
-`init_db()` in `db.py` creates ten tables:
+`init_db()` in `db.py` creates eleven tables:
 - `employees` — name (unique), email, department, manager_email
 - `violations` — employee_name, category, incident, penalty_color, penalty_label, deduction_hours, deduction_days, freeze_months, comment, submitted_by, proof_image (base64), created_at
 - `users` — email (unique), name, role (hr_manager/hr_officer/dept_head/employee), department, bcrypt password_hash, is_active, lockout columns
 - `sessions` — SHA-256 of the session cookie token, user_id, csrf_token, expires_at
 - `password_resets` — SHA-256 of the reset token, user_id, expires_at, used
-- `attendance` — one row per user per work day: user_id, work_date, clock_in/out timestamps (UTC), GPS lat/lng/accuracy, matched office, distance, verified flags, request IP (in/out, audit-only), and per-punch `edge` markers (punch only inside the fence via the accuracy slack). List responses add an advisory `risk` field (spoof signals: unrealistic/coarse accuracy, missing accuracy, edge-of-fence, impossible travel) computed at read time; the IP, edge markers, and `risk` are HR-only (never returned to the employee's own view). The accuracy slack is capped tight (`MAX_ACCURACY_SLACK_M`), so it can't be abused to widen the geofence; punches that lean on it are flagged rather than silently accepted
+- `attendance` — one row per user per work day: user_id, work_date, clock_in/out timestamps (UTC), GPS lat/lng/accuracy, matched office, distance, verified flags, request IP (in/out, audit-only), per-punch `edge` markers (punch only inside the fence via the accuracy slack), and per-punch `on_network` flags (whether the request IP fell inside a configured office network — NULL when none configured). List responses add an advisory `risk` field (spoof signals: unrealistic/coarse accuracy, missing accuracy, edge-of-fence, impossible travel, off-network) computed at read time; the IP, edge markers, `on_network`, and `risk` are HR-only (never returned to the employee's own view). The accuracy slack is capped tight (`MAX_ACCURACY_SLACK_M`), so it can't be abused to widen the geofence; punches that lean on it are flagged rather than silently accepted
 - `office_locations` — geofence anchors (name, lat, lng, radius_m) that punches must fall inside
+- `office_networks` — public IP / CIDR ranges the office network exits from (e.g. the office Wi-Fi's egress IP). A punch whose request IP falls outside every configured range is flagged `off_network` in `risk` (advisory — never blocks the punch). Browsers can't read the Wi-Fi SSID, so this egress-IP match is the in-browser way to tie a punch to the office network
 - `webauthn_credentials` — per-user device fingerprint credentials (credential_id, public_key base64url, sign_count)
 - `webauthn_challenges` — short-lived WebAuthn challenges (one per user per purpose)
 - `permissions` — early-leave permissions (استئذان): employee_name, permission_date, month_key (drives the monthly quota), note, attachment (base64, HR-manager only), created_by, created_at

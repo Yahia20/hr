@@ -55,8 +55,11 @@ export default function Attendance({ lang, user }) {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [offices, setOffices] = useState([]);
+  const [networks, setNetworks] = useState([]);
+  const [networkForm, setNetworkForm] = useState({ label: "", cidr: "" });
+  const [confirmNetwork, setConfirmNetwork] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(null); // "in" | "out" | "fp" | "office"
+  const [busy, setBusy] = useState(null); // "in" | "out" | "fp" | "office" | "net"
   const [now, setNow] = useState(new Date());
   const [filters, setFilters] = useState({ date_from: "", date_to: "", employee: "" });
   const [officeForm, setOfficeForm] = useState({ name: "", lat: "", lng: "", radius_m: 150 });
@@ -85,7 +88,10 @@ export default function Attendance({ lang, user }) {
     setTotal(res.total);
   }
   async function loadOffices() {
-    if (isHR) setOffices(await api.listOffices());
+    if (!isHR) return;
+    const [offs, nets] = await Promise.all([api.listOffices(), api.listNetworks()]);
+    setOffices(offs);
+    setNetworks(nets);
   }
   useEffect(() => {
     Promise.all([loadMe(), loadOffices()])
@@ -190,6 +196,44 @@ export default function Attendance({ lang, user }) {
     }
   }
 
+  async function useMyIp() {
+    try {
+      const { ip } = await api.myIp();
+      setNetworkForm((f) => ({ ...f, cidr: ip }));
+    } catch (e) {
+      toast("err", errMsg(t, e));
+    }
+  }
+
+  async function addNetwork() {
+    if (!networkForm.cidr.trim()) return;
+    setBusy("net");
+    try {
+      await api.createNetwork({ label: networkForm.label, cidr: networkForm.cidr });
+      setNetworkForm({ label: "", cidr: "" });
+      toast("ok", t("savedOk"));
+      await loadOffices();
+    } catch (e) {
+      toast("err", e?.status === 422 ? t("errNetInvalid") : errMsg(t, e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function removeNetwork() {
+    setDeleting(true);
+    try {
+      await api.deleteNetwork(confirmNetwork.id);
+      toast("ok", t("delOk"));
+      setConfirmNetwork(null);
+      await loadOffices();
+    } catch {
+      toast("err", t("errGeneric"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const today = me?.today;
   const canIn = !today;
   const canOut = !!today;
@@ -203,7 +247,7 @@ export default function Attendance({ lang, user }) {
   // Clamp back onto a valid page if the result set shrank (e.g. after filtering).
   useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
 
-  const RISK_LABEL = { zero_accuracy: "riskZeroAcc", no_accuracy: "riskNoAcc", impossible_travel: "riskTeleport", low_precision: "riskLowPrec", edge_of_fence: "riskEdge" };
+  const RISK_LABEL = { zero_accuracy: "riskZeroAcc", no_accuracy: "riskNoAcc", impossible_travel: "riskTeleport", low_precision: "riskLowPrec", edge_of_fence: "riskEdge", off_network: "riskOffNet" };
   const riskCell = (risk) => {
     if (!risk || risk.level === "none" || !risk.reasons?.length) {
       return <span style={{ color: S.g300 }}>—</span>;
@@ -340,6 +384,43 @@ export default function Attendance({ lang, user }) {
         </Card>
       )}
 
+      {/* Office networks (Wi-Fi egress IP) */}
+      {isHR && (
+        <Card>
+          <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, marginTop: 0, marginBottom: 6 }}>{t("officeNetworks")}</h3>
+          <p style={{ fontSize: 12.5, color: S.g400, marginTop: 0 }}>{t("officeNetworksSub")}</p>
+          {networks.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+              {networks.map((n) => (
+                <div key={n.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 12px", borderRadius: S.r2, background: S.g50, border: `1px solid ${S.g100}`, gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, color: S.g700, fontWeight: 600 }}>
+                    {IC.globe} {n.label || "—"}
+                    <small style={{ color: S.g400, fontWeight: 400, direction: "ltr" }}>{n.cidr}</small>
+                  </span>
+                  {isManager && (
+                    <button onClick={() => setConfirmNetwork(n)} style={{ fontSize: 12, fontWeight: 600, padding: "4px 10px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, color: S.err, cursor: "pointer", fontFamily: "inherit" }}>{t("del")}</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {networks.length === 0 && <div style={{ fontSize: 13, color: S.warn, fontWeight: 600, marginBottom: 14 }}>{t("noNetworks")}</div>}
+          {isManager && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 14, marginBottom: 14 }}>
+                <FG label={t("netLabel")}><input style={inp} value={networkForm.label} onChange={(e) => setNetworkForm({ ...networkForm, label: e.target.value })} /></FG>
+                <FG label={t("cidr")}><input style={{ ...inp, direction: "ltr" }} placeholder="203.0.113.0/24" value={networkForm.cidr} onChange={(e) => setNetworkForm({ ...networkForm, cidr: e.target.value })} /></FG>
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <BtnSec onClick={useMyIp}>{IC.globe} <span>{t("useMyIp")}</span></BtnSec>
+                <BtnPri onClick={addNetwork} disabled={busy === "net"}>{IC.plus} <span>{t("addNetwork")}</span></BtnPri>
+              </div>
+              <small style={{ display: "block", marginTop: 10, fontSize: 11.5, color: S.g400 }}>{t("netHint")}</small>
+            </>
+          )}
+        </Card>
+      )}
+
       {/* History */}
       <Card flush>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, padding: "16px 16px 0" }}>
@@ -394,6 +475,17 @@ export default function Attendance({ lang, user }) {
         busy={deleting}
         title={t("confirmDel")}
         body={`${t("del")}: ${confirmOffice?.name || ""} — ${t("irreversible")}`}
+        confirmLabel={t("del")}
+        cancelLabel={t("cancel")}
+      />
+
+      <ConfirmModal
+        open={confirmNetwork !== null}
+        onClose={() => setConfirmNetwork(null)}
+        onConfirm={removeNetwork}
+        busy={deleting}
+        title={t("confirmDel")}
+        body={`${t("del")}: ${confirmNetwork?.cidr || ""} — ${t("irreversible")}`}
         confirmLabel={t("del")}
         cancelLabel={t("cancel")}
       />

@@ -50,9 +50,13 @@ def admin(client):
 
 @pytest.fixture(autouse=True)
 def _clean_offices(admin):
-    """Every test starts with no geofence offices; tests opt in explicitly."""
+    """Every test starts with no geofence offices and no office networks; tests
+    opt in explicitly. Networks are cleared too so a leftover one can't flag
+    (off_network) punches made by unrelated tests."""
     for o in admin.get("/api/attendance/offices").json():
         admin.delete(f"/api/attendance/offices/{o['id']}", headers=csrf(admin))
+    for n in admin.get("/api/attendance/networks").json():
+        admin.delete(f"/api/attendance/networks/{n['id']}", headers=csrf(admin))
     yield
 
 

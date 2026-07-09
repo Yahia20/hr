@@ -85,6 +85,12 @@ export const api = {
   createOffice: (data) => req("/attendance/offices", { method: "POST", body: JSON.stringify(data) }),
   deleteOffice: (id) => req(`/attendance/offices/${id}`, { method: "DELETE" }),
 
+  // Office networks (Wi-Fi egress IP allow-list) — advisory presence check
+  listNetworks: () => req("/attendance/networks"),
+  createNetwork: (data) => req("/attendance/networks", { method: "POST", body: JSON.stringify(data) }),
+  deleteNetwork: (id) => req(`/attendance/networks/${id}`, { method: "DELETE" }),
+  myIp: () => req("/attendance/my-ip"),
+
   waRegisterBegin: () => req("/attendance/webauthn/register/begin", { method: "POST" }),
   waRegisterComplete: (data) => req("/attendance/webauthn/register/complete", { method: "POST", body: JSON.stringify(data) }),
   waClockBegin: () => req("/attendance/webauthn/clock/begin", { method: "POST" }),

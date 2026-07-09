@@ -1,4 +1,5 @@
 import io
+import ipaddress
 import json
 import logging
 import math
@@ -43,7 +44,14 @@ from ..auth import (
     require_user,
 )
 from ..db import db
-from ..schemas import ClockActionIn, Office, OfficeIn, WebAuthnRegisterIn
+from ..schemas import (
+    ClockActionIn,
+    Office,
+    OfficeIn,
+    OfficeNetwork,
+    OfficeNetworkIn,
+    WebAuthnRegisterIn,
+)
 
 logger = logging.getLogger("hr.attendance")
 
@@ -271,6 +279,32 @@ def _check_geofence(payload: ClockActionIn) -> tuple[str, Optional[float], bool]
 
 
 # ---------------------------------------------------------------------------
+# Office networks (Wi-Fi egress IP / CIDR allow-list) — advisory only
+# ---------------------------------------------------------------------------
+
+def _ip_on_network(ip: str) -> Optional[int]:
+    """Whether a punch's request IP falls inside a configured office network
+    (e.g. the office Wi-Fi's public egress IP). Returns None when no networks
+    are configured (feature off), else 1 (on) / 0 (off). Never blocks a punch —
+    the result is surfaced as an advisory flag for HR."""
+    with db() as conn:
+        cidrs = [r["cidr"] for r in conn.execute("SELECT cidr FROM office_networks").fetchall()]
+    if not cidrs:
+        return None
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return 0  # unknown/unparseable IP can't be on the office network
+    for c in cidrs:
+        try:
+            if addr in ipaddress.ip_network(c, strict=False):
+                return 1
+        except ValueError:
+            continue
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # WebAuthn registration / authentication ceremonies
 # ---------------------------------------------------------------------------
 
@@ -394,6 +428,41 @@ def delete_office(oid: int, _: CurrentUser = Depends(_manager)):
 
 
 # ---------------------------------------------------------------------------
+# Office networks (Wi-Fi egress IP allow-list)
+# ---------------------------------------------------------------------------
+
+@router.get("/networks", response_model=list[OfficeNetwork])
+def list_networks(_: CurrentUser = Depends(_hr_staff)):
+    with db() as conn:
+        rows = conn.execute("SELECT id, label, cidr FROM office_networks ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+
+@router.post("/networks", response_model=OfficeNetwork, status_code=201)
+def create_network(payload: OfficeNetworkIn, _: CurrentUser = Depends(_manager)):
+    with db() as conn:
+        cur = conn.execute(
+            """INSERT INTO office_networks (label, cidr, created_at)
+               VALUES (?, ?, ?) RETURNING id, label, cidr""",
+            (payload.label, payload.cidr, _fmt(_utcnow())),
+        )
+        return dict(cur.fetchone())
+
+
+@router.delete("/networks/{nid}", status_code=204)
+def delete_network(nid: int, _: CurrentUser = Depends(_manager)):
+    with db() as conn:
+        conn.execute("DELETE FROM office_networks WHERE id = ?", (nid,))
+
+
+@router.get("/my-ip")
+def my_ip(request: Request, _: CurrentUser = Depends(_hr_staff)):
+    """The caller's current public IP, so HR can register the office network by
+    clicking 'use my current IP' while on the office Wi-Fi."""
+    return {"ip": client_ip(request)}
+
+
+# ---------------------------------------------------------------------------
 # Clock in / out
 # ---------------------------------------------------------------------------
 
@@ -476,16 +545,19 @@ def clock_in(payload: ClockActionIn, request: Request, user: CurrentUser = Depen
     # the WebAuthn challenge or bumped the credential's sign counter.
     office, distance, edge = _check_geofence(payload)
     verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
+    ip = client_ip(request)
+    on_network = _ip_on_network(ip)
 
     try:
         with db() as conn:
             cur = conn.execute(
                 """INSERT INTO attendance
                    (user_id, work_date, clock_in_at, clock_in_lat, clock_in_lng, clock_in_accuracy,
-                    clock_in_office, clock_in_distance_m, clock_in_verified, clock_in_ip, clock_in_edge)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *""",
+                    clock_in_office, clock_in_distance_m, clock_in_verified, clock_in_ip, clock_in_edge,
+                    clock_in_on_network)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *""",
                 (user.id, work_date, _fmt(now), payload.lat, payload.lng, payload.accuracy,
-                 office, distance, int(verified), client_ip(request), int(edge)),
+                 office, distance, int(verified), ip, int(edge), on_network),
             )
             return _without_ip(dict(cur.fetchone()))
     except sqlite3.IntegrityError:
@@ -504,6 +576,8 @@ def clock_out(payload: ClockActionIn, request: Request, user: CurrentUser = Depe
 
     office, distance, edge = _check_geofence(payload)
     verified = _verify_clock_assertion(user, payload.assertion) if REQUIRE_BIOMETRIC else False
+    ip = client_ip(request)
+    on_network = _ip_on_network(ip)
 
     # Re-clocking out is allowed: the last punch of the day wins.
     with db() as conn:
@@ -511,10 +585,10 @@ def clock_out(payload: ClockActionIn, request: Request, user: CurrentUser = Depe
             """UPDATE attendance SET
                  clock_out_at = ?, clock_out_lat = ?, clock_out_lng = ?, clock_out_accuracy = ?,
                  clock_out_office = ?, clock_out_distance_m = ?, clock_out_verified = ?, clock_out_ip = ?,
-                 clock_out_edge = ?
+                 clock_out_edge = ?, clock_out_on_network = ?
                WHERE id = ? RETURNING *""",
             (_fmt(now), payload.lat, payload.lng, payload.accuracy,
-             office, distance, int(verified), client_ip(request), int(edge), row["id"]),
+             office, distance, int(verified), ip, int(edge), on_network, row["id"]),
         )
         return _without_ip(dict(cur.fetchone()))
 
@@ -553,6 +627,12 @@ def _risk(row: dict) -> dict:
         # Only counted as inside the office because of the accuracy slack.
         if row.get(f"{side}_edge"):
             reasons.append("edge_of_fence")
+
+    # Punch came from outside the office network (Wi-Fi egress IP allow-list).
+    # None means no networks are configured, so nothing to flag.
+    for side in ("clock_in", "clock_out"):
+        if row.get(f"{side}_on_network") == 0:
+            reasons.append("off_network")
 
     have_both = all(
         row.get(k) is not None
@@ -657,6 +737,8 @@ def list_attendance(
             r.pop("risk", None)
             r.pop("clock_in_edge", None)
             r.pop("clock_out_edge", None)
+            r.pop("clock_in_on_network", None)
+            r.pop("clock_out_on_network", None)
     return {"rows": rows, "total": total, "limit": limit, "offset": offset}
 
 
@@ -685,8 +767,13 @@ def export_attendance(
     ws.append([
         "Date", "Employee", "Email", "Department", "Clock In", "Clock Out",
         "Hours", "Office (In)", "Office (Out)", "Fingerprint In", "Fingerprint Out",
-        "Risk", "Risk Reasons", "IP (In)", "IP (Out)",
+        "On Network (In)", "On Network (Out)", "Risk", "Risk Reasons", "IP (In)", "IP (Out)",
     ])
+
+    def yn_net(v):
+        # None = office networks not configured; 1/0 = on/off the office network.
+        return "" if v is None else ("yes" if v else "no")
+
     for r in rows:
         risk = r.get("risk") or {"level": "none", "reasons": []}
         ws.append([
@@ -696,6 +783,7 @@ def export_attendance(
             _xlsx_safe(r["clock_in_office"]), _xlsx_safe(r["clock_out_office"]),
             "yes" if r["clock_in_verified"] else "no",
             "yes" if r["clock_out_verified"] else "no",
+            yn_net(r.get("clock_in_on_network")), yn_net(r.get("clock_out_on_network")),
             risk["level"], ", ".join(risk["reasons"]),
             _xlsx_safe(r.get("clock_in_ip", "")), _xlsx_safe(r.get("clock_out_ip", "")),
         ])
