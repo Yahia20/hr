@@ -22,6 +22,7 @@ export default function Users({ lang, user }) {
   const [loading, setLoading] = useState(true);
   const [confirmUser, setConfirmUser] = useState(null);
   const [deactivating, setDeactivating] = useState(false);
+  const [savingRole, setSavingRole] = useState(null);
   const toast = useToast();
 
   async function load() {
@@ -59,6 +60,20 @@ export default function Users({ lang, user }) {
       toast("err", t("errGeneric"));
     } finally {
       setDeactivating(false);
+    }
+  }
+
+  async function changeRole(u, role) {
+    if (role === u.role) return;
+    setSavingRole(u.id);
+    try {
+      await api.updateUser(u.id, { role });
+      toast("ok", t("roleUpdated"));
+      await load();
+    } catch (e) {
+      toast("err", e?.status === 409 ? t("errLastManager") : (e?.message || t("errGeneric")));
+    } finally {
+      setSavingRole(null);
     }
   }
 
@@ -109,7 +124,21 @@ export default function Users({ lang, user }) {
                 <tr key={u.id} style={{ borderBottom: `1px solid ${S.g100}`, opacity: u.is_active ? 1 : 0.5 }}>
                   <td style={{ padding: "12px 16px", fontWeight: 600, color: S.g700 }}>{u.name}</td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{u.email}</td>
-                  <td style={{ padding: "12px 16px", color: S.g600 }}>{roleLabel[u.role] || u.role}</td>
+                  <td style={{ padding: "12px 16px", color: S.g600 }}>
+                    {u.is_active && u.id !== user.id ? (
+                      <select
+                        value={u.role}
+                        disabled={savingRole === u.id}
+                        onChange={(e) => changeRole(u, e.target.value)}
+                        aria-label={t("role")}
+                        style={{ ...inp, padding: "6px 10px", cursor: savingRole === u.id ? "wait" : "pointer", minWidth: 130 }}
+                      >
+                        {Object.entries(roleLabel).map(([v, lbl]) => <option key={v} value={v}>{lbl}</option>)}
+                      </select>
+                    ) : (
+                      roleLabel[u.role] || u.role
+                    )}
+                  </td>
                   <td style={{ padding: "12px 16px", color: S.g600 }}>{u.department}</td>
                   <td style={{ padding: "12px 16px", color: u.is_active ? S.ok : S.g400, fontWeight: 600 }}>{u.is_active ? t("active") : t("inactive")}</td>
                   <td style={{ padding: "12px 16px" }}>

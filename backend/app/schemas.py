@@ -79,6 +79,13 @@ class UserIn(BaseModel):
     password: str = Field(..., min_length=8, max_length=200)
 
 
+class UserUpdateIn(BaseModel):
+    # Both optional: update whichever fields are supplied (at least one required,
+    # enforced in the route). role is validated against the same allow-list as UserIn.
+    role: Optional[str] = Field(None, pattern="^(hr_manager|hr_officer|dept_head|employee)$")
+    department: Optional[str] = Field(None, max_length=120)
+
+
 class UserOut(BaseModel):
     id: int
     email: str
