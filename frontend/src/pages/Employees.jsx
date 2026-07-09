@@ -19,6 +19,7 @@ export default function Employees({ lang, user, onGoPerm }) {
 
   const [list, setList] = useState([]);
   const [perm, setPerm] = useState({ quota: 2, used: {} });
+  const [permOk, setPermOk] = useState(true);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", department: "", manager_email: "" });
@@ -44,7 +45,8 @@ export default function Employees({ lang, user, onGoPerm }) {
           const used = {};
           for (const e of p.employees || []) used[e.employee_name] = e.used;
           setPerm({ quota: p.quota ?? 2, used });
-        } catch { /* leave the indicator empty */ }
+          setPermOk(true);
+        } catch { setPermOk(false); /* show a dash rather than a misleading 0/quota */ }
       }
     } catch (e) {
       setErr(e.message);
@@ -156,9 +158,10 @@ export default function Employees({ lang, user, onGoPerm }) {
                       <button
                         onClick={() => onGoPerm && onGoPerm()}
                         title={t("scPerm")}
+                        aria-label={`${t("slotsLabel")} — ${e.name}`}
                         style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w, cursor: onGoPerm ? "pointer" : "default", fontFamily: "inherit" }}
                       >
-                        {slots(perm.used[e.name] || 0)}
+                        {permOk ? slots(perm.used[e.name] || 0) : <span style={{ color: S.g300 }}>—</span>}
                       </button>
                     </td>
                   )}
