@@ -46,6 +46,8 @@ export const L = {
     users: "Users", addUser: "Add User", role: "Role", deactivate: "Deactivate",
     roleManager: "HR Manager", roleOfficer: "HR Officer",
     roleDeptHead: "Department Head", roleEmployee: "Employee",
+    roleUpdated: "Role updated — the user is signed out and sees the new access on next login",
+    errLastManager: "You can't change the role of the last active HR Manager",
     noUsers: "No users yet", inactive: "Inactive",
     // ux
     exportPdf: "Export PDF", dark: "Dark mode", light: "Light mode",
@@ -211,6 +213,8 @@ export const L = {
     roleManager: "\u0645\u062F\u064A\u0631 \u0627\u0644\u0645\u0648\u0627\u0631\u062F \u0627\u0644\u0628\u0634\u0631\u064A\u0629",
     roleOfficer: "\u0645\u0633\u0624\u0648\u0644 \u0645\u0648\u0627\u0631\u062F \u0628\u0634\u0631\u064A\u0629",
     roleDeptHead: "\u0631\u0626\u064A\u0633 \u0642\u0633\u0645", roleEmployee: "\u0645\u0648\u0638\u0641",
+    roleUpdated: "\u062A\u0645 \u062A\u062D\u062F\u064A\u062B \u0627\u0644\u062F\u0648\u0631 \u2014 \u0627\u0644\u0645\u0633\u062A\u062E\u062F\u0645 \u0647\u064A\u062A\u0633\u062C\u0651\u0644 \u062E\u0631\u0648\u062C \u0648\u064A\u0634\u0648\u0641 \u0627\u0644\u0635\u0644\u0627\u062D\u064A\u0629 \u0627\u0644\u062C\u062F\u064A\u062F\u0629 \u0639\u0646\u062F \u0627\u0644\u062F\u062E\u0648\u0644 \u0645\u0631\u0629 \u062A\u0627\u0646\u064A\u0629",
+    errLastManager: "\u0645\u064A\u0646\u0641\u0639\u0634 \u062A\u063A\u064A\u0651\u0631 \u062F\u0648\u0631 \u0622\u062E\u0631 \u0645\u062F\u064A\u0631 \u0645\u0648\u0627\u0631\u062F \u0628\u0634\u0631\u064A\u0629 \u0646\u0634\u0637",
     noUsers: "\u0644\u0627 \u064A\u0648\u062C\u062F \u0645\u0633\u062A\u062E\u062F\u0645\u0648\u0646 \u0628\u0639\u062F",
     inactive: "\u0645\u0639\u0637\u0644",
     // ux

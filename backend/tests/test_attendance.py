@@ -391,3 +391,45 @@ def test_export_has_network_columns(admin, new_employee):
     headers = [c.value for c in ws[1]]
     for col in ("On Network (In)", "On Network (Out)"):
         assert col in headers
+
+
+def test_punch_on_network_via_http(admin, new_employee, monkeypatch):
+    # The full HTTP clock path with a request IP inside the office network:
+    # both punches record on_network=1 and nothing is flagged. (TestClient's own
+    # IP can't match a real CIDR, so the on-network path is driven by patching
+    # the resolved client IP — the same value uvicorn derives via --proxy-headers.)
+    admin.post("/api/attendance/networks", json={"label": "HQ", "cidr": "203.0.113.0/24"}, headers=csrf(admin))
+    monkeypatch.setattr("app.routers.attendance.client_ip", lambda request: "203.0.113.50")
+    emp, email = new_employee()
+
+    assert emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 5}, headers=csrf(emp)).status_code == 201
+    assert emp.post("/api/attendance/clock-out", json={"lat": 10, "lng": 10, "accuracy": 5}, headers=csrf(emp)).status_code == 200
+
+    row = _admin_row(admin, email)
+    assert row["clock_in_on_network"] == 1 and row["clock_out_on_network"] == 1
+    assert "off_network" not in row["risk"]["reasons"]
+
+
+def test_punch_off_network_via_http_still_succeeds(admin, new_employee, monkeypatch):
+    # A controlled outside IP: flagged off_network but the punch is accepted
+    # (advisory, never blocks) — the full HTTP path, not just the helper.
+    admin.post("/api/attendance/networks", json={"cidr": "203.0.113.0/24"}, headers=csrf(admin))
+    monkeypatch.setattr("app.routers.attendance.client_ip", lambda request: "8.8.8.8")
+    emp, email = new_employee()
+    assert emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10}, headers=csrf(emp)).status_code == 201
+
+    row = _admin_row(admin, email)
+    assert row["clock_in_on_network"] == 0
+    assert "off_network" in row["risk"]["reasons"]
+
+
+def test_ip_on_network_ipv6_and_multiple_ranges(admin):
+    from app.routers.attendance import _ip_on_network
+    admin.post("/api/attendance/networks", json={"cidr": "203.0.113.7"}, headers=csrf(admin))      # bare IP -> /32
+    admin.post("/api/attendance/networks", json={"cidr": "198.51.100.0/24"}, headers=csrf(admin))  # a v4 range
+    admin.post("/api/attendance/networks", json={"cidr": "2001:db8::/32"}, headers=csrf(admin))     # a v6 range
+    assert _ip_on_network("203.0.113.7") == 1      # exact /32 match
+    assert _ip_on_network("203.0.113.8") == 0      # just outside the /32
+    assert _ip_on_network("198.51.100.42") == 1    # inside the v4 range
+    assert _ip_on_network("2001:db8::1") == 1      # inside the v6 range
+    assert _ip_on_network("2001:dead::1") == 0     # outside the v6 range

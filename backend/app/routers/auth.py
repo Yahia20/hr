@@ -16,6 +16,7 @@ from ..schemas import (
     ResetPasswordIn,
     UserIn,
     UserOut,
+    UserUpdateIn,
 )
 
 logger = logging.getLogger("hr.auth")
@@ -186,6 +187,52 @@ def create_user(payload: UserIn, _: A.CurrentUser = Depends(A.require_role(A.ROL
             return dict(cur.fetchone())
         except sqlite3.IntegrityError:
             raise HTTPException(status.HTTP_409_CONFLICT, "A user with this email already exists")
+
+
+@router.patch("/users/{user_id}", response_model=UserOut)
+def update_user(
+    user_id: int,
+    payload: UserUpdateIn,
+    _: A.CurrentUser = Depends(A.require_role(A.ROLE_HR_MANAGER)),
+):
+    """Update a user's role and/or department (HR Manager only). Used to promote
+    a user to hr_officer/hr_manager so they gain access to the matching pages."""
+    if payload.role is None and payload.department is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nothing to update")
+    with db() as conn:
+        row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+        # Never demote the last active HR manager — that would lock everyone out
+        # of user management.
+        if (payload.role is not None and payload.role != A.ROLE_HR_MANAGER
+                and row["role"] == A.ROLE_HR_MANAGER):
+            others = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1 AND id != ?",
+                (A.ROLE_HR_MANAGER, user_id),
+            ).fetchone()[0]
+            if others == 0:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Cannot change the last active HR manager")
+        sets, params = [], []
+        if payload.role is not None:
+            sets.append("role = ?")
+            params.append(payload.role)
+        if payload.department is not None:
+            sets.append("department = ?")
+            params.append(payload.department.strip())
+        params.append(user_id)
+        updated = dict(conn.execute(
+            f"UPDATE users SET {', '.join(sets)} WHERE id = ? "
+            "RETURNING id, email, name, role, department, is_active",
+            params,
+        ).fetchone())
+    # A role change alters access. require_user reads the role fresh per request,
+    # so the API gate updates immediately; drop the user's sessions too so a
+    # demotion revokes their (frontend-cached) elevated view on the next request
+    # and a promotion is picked up cleanly on re-login.
+    if payload.role is not None and payload.role != row["role"]:
+        A.destroy_user_sessions(user_id)
+    return updated
 
 
 @router.delete("/users/{user_id}", status_code=204)

@@ -42,6 +42,7 @@ export const api = {
 
   listUsers: () => req("/auth/users"),
   createUser: (data) => req("/auth/users", { method: "POST", body: JSON.stringify(data) }),
+  updateUser: (id, data) => req(`/auth/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deactivateUser: (id) => req(`/auth/users/${id}`, { method: "DELETE" }),
 
   listEmployees: () => req("/employees"),
