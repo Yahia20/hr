@@ -111,6 +111,17 @@ def init_db() -> None:
                 created_at TEXT    NOT NULL
             );
 
+            -- Office networks: the public IP / CIDR ranges a punch is expected to
+            -- come from when the employee is on the office network (e.g. the office
+            -- Wi-Fi's egress IP). Advisory only — a punch from outside is flagged
+            -- for HR review, never blocked.
+            CREATE TABLE IF NOT EXISTS office_networks (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                label      TEXT    NOT NULL DEFAULT '',
+                cidr       TEXT    NOT NULL,
+                created_at TEXT    NOT NULL
+            );
+
             -- One row per user per work day (first clock-in / last clock-out).
             -- Times are stored in UTC; work_date is the local business day.
             CREATE TABLE IF NOT EXISTS attendance (
@@ -185,6 +196,10 @@ def init_db() -> None:
             "clock_out_ip": "TEXT NOT NULL DEFAULT ''",
             "clock_in_edge": "INTEGER NOT NULL DEFAULT 0",
             "clock_out_edge": "INTEGER NOT NULL DEFAULT 0",
+            # NULL = no office networks configured (feature off); 1/0 = on/off the
+            # office network at punch time. Derived fact, kept past the IP purge.
+            "clock_in_on_network": "INTEGER",
+            "clock_out_on_network": "INTEGER",
         })
         raw.commit()
     finally:

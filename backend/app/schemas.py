@@ -1,5 +1,6 @@
 import base64
 import binascii
+import ipaddress
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -143,6 +144,32 @@ class OfficeIn(BaseModel):
 
 class Office(OfficeIn):
     id: int
+
+
+class OfficeNetworkIn(BaseModel):
+    label: str = Field("", max_length=120)
+    # An IP (203.0.113.7) or CIDR range (203.0.113.0/24); a bare IP is stored as
+    # a /32 (or /128). Normalised to canonical form on the way in.
+    cidr: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("label")
+    @classmethod
+    def _strip_label(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("cidr")
+    @classmethod
+    def _valid_cidr(cls, v: str) -> str:
+        try:
+            return str(ipaddress.ip_network(v.strip(), strict=False))
+        except ValueError:
+            raise ValueError("cidr must be a valid IP or CIDR, e.g. 203.0.113.7 or 203.0.113.0/24")
+
+
+class OfficeNetwork(BaseModel):
+    id: int
+    label: str
+    cidr: str
 
 
 class ClockActionIn(BaseModel):

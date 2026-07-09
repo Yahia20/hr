@@ -308,3 +308,86 @@ def test_export_has_risk_and_ip_columns(admin, new_employee):
     headers = [c.value for c in ws[1]]
     for col in ("Risk", "Risk Reasons", "IP (In)", "IP (Out)"):
         assert col in headers
+
+
+# --- Office networks (Wi-Fi egress IP allow-list) — advisory only -----------
+
+def test_office_networks_crud_and_guards(admin, new_employee):
+    # Manager can add; a bare IP is normalised to a /32.
+    r = admin.post("/api/attendance/networks", json={"label": "HQ Wi-Fi", "cidr": "203.0.113.7"}, headers=csrf(admin))
+    assert r.status_code == 201, r.text
+    assert r.json()["cidr"] == "203.0.113.7/32"
+    nid = r.json()["id"]
+
+    # A CIDR range is accepted; garbage is rejected by the schema.
+    assert admin.post("/api/attendance/networks", json={"cidr": "10.0.0.0/8"}, headers=csrf(admin)).status_code == 201
+    assert admin.post("/api/attendance/networks", json={"cidr": "not-an-ip"}, headers=csrf(admin)).status_code == 422
+
+    # Officer reads but can't write or delete; employee can't even read.
+    officer, _ = new_employee(role="hr_officer")
+    assert officer.get("/api/attendance/networks").status_code == 200
+    assert officer.post("/api/attendance/networks", json={"cidr": "192.0.2.0/24"}, headers=csrf(officer)).status_code == 403
+    assert officer.delete(f"/api/attendance/networks/{nid}", headers=csrf(officer)).status_code == 403
+    emp, _ = new_employee(role="employee")
+    assert emp.get("/api/attendance/networks").status_code == 403
+
+    assert admin.delete(f"/api/attendance/networks/{nid}", headers=csrf(admin)).status_code == 204
+
+
+def test_networks_require_auth():
+    anon = TestClient(app)
+    assert anon.get("/api/attendance/networks").status_code == 401
+
+
+def test_ip_on_network_helper(admin):
+    from app.routers.attendance import _ip_on_network
+    # No networks configured -> feature off (None), nothing to flag.
+    assert _ip_on_network("203.0.113.5") is None
+    admin.post("/api/attendance/networks", json={"label": "HQ", "cidr": "203.0.113.0/24"}, headers=csrf(admin))
+    assert _ip_on_network("203.0.113.5") == 1    # inside the range
+    assert _ip_on_network("198.51.100.9") == 0   # outside
+    assert _ip_on_network("not-an-ip") == 0      # unparseable can't be on-network
+
+
+def test_my_ip_endpoint(admin, new_employee):
+    assert "ip" in admin.get("/api/attendance/my-ip").json()
+    emp, _ = new_employee(role="employee")
+    assert emp.get("/api/attendance/my-ip").status_code == 403  # HR-staff only
+
+
+def test_punch_flagged_when_off_office_network(admin, new_employee):
+    # With a network configured, a punch from an IP outside it is flagged
+    # off_network (advisory) but still succeeds — the check never blocks.
+    admin.post("/api/attendance/networks", json={"label": "HQ", "cidr": "203.0.113.0/24"}, headers=csrf(admin))
+    emp, email = new_employee()
+    r = emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 5}, headers=csrf(emp))
+    assert r.status_code == 201, r.text  # accepted, not blocked
+
+    row = _admin_row(admin, email)
+    assert row["clock_in_on_network"] == 0
+    assert "off_network" in row["risk"]["reasons"]
+
+
+def test_no_networks_means_no_flag(admin, new_employee):
+    emp, email = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 5}, headers=csrf(emp))
+    row = _admin_row(admin, email)
+    assert row["clock_in_on_network"] is None  # feature off
+    assert "off_network" not in row["risk"]["reasons"]
+
+
+def test_on_network_hidden_from_employee(admin, new_employee):
+    admin.post("/api/attendance/networks", json={"cidr": "203.0.113.0/24"}, headers=csrf(admin))
+    emp, _ = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10}, headers=csrf(emp))
+    row = emp.get("/api/attendance").json()["rows"][0]
+    assert "clock_in_on_network" not in row  # advisory flag is HR-only in the list
+
+
+def test_export_has_network_columns(admin, new_employee):
+    emp, _ = new_employee()
+    emp.post("/api/attendance/clock-in", json={"lat": 10, "lng": 10, "accuracy": 5}, headers=csrf(emp))
+    ws = load_workbook(io.BytesIO(admin.get("/api/attendance/export").content)).active
+    headers = [c.value for c in ws[1]]
+    for col in ("On Network (In)", "On Network (Out)"):
+        assert col in headers
