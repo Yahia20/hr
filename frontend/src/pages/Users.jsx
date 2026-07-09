@@ -66,11 +66,15 @@ export default function Users({ lang, user }) {
   async function changeRole(u, role) {
     if (role === u.role) return;
     setSavingRole(u.id);
+    // Optimistically reflect the new role so the controlled <select> doesn't
+    // snap back to the old value mid-save; roll back if the request fails.
+    setList((cur) => cur.map((x) => (x.id === u.id ? { ...x, role } : x)));
     try {
       await api.updateUser(u.id, { role });
       toast("ok", t("roleUpdated"));
       await load();
     } catch (e) {
+      setList((cur) => cur.map((x) => (x.id === u.id ? { ...x, role: u.role } : x)));
       toast("err", e?.status === 409 ? t("errLastManager") : (e?.message || t("errGeneric")));
     } finally {
       setSavingRole(null);
