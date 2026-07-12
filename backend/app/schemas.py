@@ -1,6 +1,5 @@
 import base64
 import binascii
-import ipaddress
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
@@ -135,62 +134,6 @@ class PermissionIn(BaseModel):
         if v and v not in ALLOWED_ATTACHMENT_MIME:
             raise ValueError("unsupported attachment type")
         return v
-
-
-class OfficeIn(BaseModel):
-    name: str = Field(..., min_length=1, max_length=120)
-    lat: float = Field(..., ge=-90, le=90)
-    lng: float = Field(..., ge=-180, le=180)
-    radius_m: int = Field(150, ge=20, le=5000)
-
-    @field_validator("name")
-    @classmethod
-    def _strip_name(cls, v: str) -> str:
-        return v.strip()
-
-
-class Office(OfficeIn):
-    id: int
-
-
-class OfficeNetworkIn(BaseModel):
-    label: str = Field("", max_length=120)
-    # An IP (203.0.113.7) or CIDR range (203.0.113.0/24); a bare IP is stored as
-    # a /32 (or /128). Normalised to canonical form on the way in.
-    cidr: str = Field(..., min_length=1, max_length=64)
-
-    @field_validator("label")
-    @classmethod
-    def _strip_label(cls, v: str) -> str:
-        return v.strip()
-
-    @field_validator("cidr")
-    @classmethod
-    def _valid_cidr(cls, v: str) -> str:
-        try:
-            return str(ipaddress.ip_network(v.strip(), strict=False))
-        except ValueError:
-            raise ValueError("cidr must be a valid IP or CIDR, e.g. 203.0.113.7 or 203.0.113.0/24")
-
-
-class OfficeNetwork(BaseModel):
-    id: int
-    label: str
-    cidr: str
-
-
-class ClockActionIn(BaseModel):
-    lat: Optional[float] = Field(None, ge=-90, le=90)
-    lng: Optional[float] = Field(None, ge=-180, le=180)
-    accuracy: Optional[float] = Field(None, ge=0)
-    # WebAuthn assertion (navigator.credentials.get result, JSON-encoded by the
-    # client). Required when biometric verification is enabled.
-    assertion: Optional[dict] = None
-
-
-class WebAuthnRegisterIn(BaseModel):
-    credential: dict
-    device_label: str = Field("", max_length=120)
 
 
 class Violation(BaseModel):

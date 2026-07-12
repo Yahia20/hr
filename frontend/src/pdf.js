@@ -5,7 +5,19 @@
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export function exportViolationsPdf({ rows, t, ar, filters = {} }) {
+// Violation proofs are stored as bare base64 with no mime; sniff it from the
+// magic bytes so the data: URL renders (uploads are images only).
+export function proofDataUrl(b64) {
+  if (!b64) return "";
+  const mime =
+    b64.startsWith("iVBOR") ? "image/png"
+    : b64.startsWith("R0lGOD") ? "image/gif"
+    : b64.startsWith("UklGR") ? "image/webp"
+    : "image/jpeg";
+  return `data:${mime};base64,${b64}`;
+}
+
+export function exportViolationsPdf({ rows, t, ar, filters = {}, proofs = {} }) {
   const headers = [t("employee"), t("cat"), t("inc"), t("pen"), t("ded"), t("subBy"), t("date")];
   const colors = { Yellow: "#D97706", Orange: "#EA580C", Red: "#DC2626", Black: "#1E293B", Investigation: "#7C3AED" };
 
@@ -25,7 +37,13 @@ export function exportViolationsPdf({ rows, t, ar, filters = {} }) {
       <td>${esc(r.deduction_days)} ${esc(t("days"))}</td>
       <td>${esc(r.submitted_by)}</td>
       <td>${esc((r.created_at || "").slice(0, 16))}</td>
-    </tr>`).join("");
+    </tr>${proofs[r.id] ? `
+    <tr class="proofRow">
+      <td colspan="7">
+        <div class="proofLabel">${esc(t("attach"))}</div>
+        <img class="proof" src="${proofs[r.id]}" alt="">
+      </td>
+    </tr>` : ""}`).join("");
 
   const html = `<!doctype html>
 <html lang="${ar ? "ar" : "en"}" dir="${ar ? "rtl" : "ltr"}">
@@ -46,6 +64,9 @@ export function exportViolationsPdf({ rows, t, ar, filters = {} }) {
   td { padding: 7px 8px; border-bottom: 1px solid #ECEEF2; vertical-align: top; }
   tr { page-break-inside: avoid; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-inline-end: 5px; }
+  .proofRow td { background: #FAFBFC; }
+  .proofLabel { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #5F6E80; margin-bottom: 4px; }
+  .proof { max-width: 340px; max-height: 220px; border: 1px solid #ECEEF2; border-radius: 6px; }
   .tot { margin-top: 14px; font-size: 11px; color: #5F6E80; }
   @page { margin: 14mm; }
 </style>

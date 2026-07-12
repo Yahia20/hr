@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .auth import bootstrap_admin
 from .db import init_db
 from .routers import auth as auth_router
-from .routers import attendance, employees, matrix, permissions, settings, stats, violations
+from .routers import employees, matrix, permissions, settings, stats, violations
 
 logger = logging.getLogger("hr")
 
@@ -30,16 +30,9 @@ def _check_production_config() -> None:
         )
         return  # remaining checks only matter once we're actually in prod mode
 
-    if _env_true("COOKIE_SECURE") and not _env_true("ATTENDANCE_REQUIRE_BIOMETRIC", "true"):
+    if not os.environ.get("APP_BASE_URL", "").strip():
         logger.warning(
-            "ATTENDANCE_REQUIRE_BIOMETRIC is disabled in production — attendance can "
-            "be clocked without fingerprint verification, so employees could punch in "
-            "for one another. Set ATTENDANCE_REQUIRE_BIOMETRIC=true unless deliberate."
-        )
-    if not os.environ.get("APP_BASE_URL", "").strip() and not os.environ.get("WEBAUTHN_RP_ID", "").strip():
-        logger.warning(
-            "APP_BASE_URL is unset in production — WebAuthn (fingerprint) will fall "
-            "back to RP ID 'localhost' and fail, and password-reset links will be "
+            "APP_BASE_URL is unset in production — password-reset links will be "
             "malformed. Set APP_BASE_URL to the public https URL of the app."
         )
     db_file = os.environ.get("HR_DB_FILE", "").strip()
@@ -56,7 +49,6 @@ async def lifespan(_app: FastAPI):
     init_db()
     bootstrap_admin()
     _check_production_config()
-    attendance.purge_location_data()  # enforce the retention window on boot
     yield
 
 
@@ -101,7 +93,6 @@ app.include_router(violations.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(matrix.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
-app.include_router(attendance.router, prefix="/api")
 app.include_router(permissions.router, prefix="/api")
 
 

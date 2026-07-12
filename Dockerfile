@@ -24,7 +24,7 @@ ENV FRONTEND_DIST=/app/static \
 EXPOSE 8000
 # --proxy-headers + --forwarded-allow-ips=* make uvicorn trust the platform's
 # X-Forwarded-For / -Proto, so request.client.host is the real client IP (not
-# the Railway edge). Required for correct per-IP login lockout, the attendance
-# IP audit, and HTTPS detection (HSTS). Only the platform edge can reach the
-# container, so trusting all forwarded IPs is safe here.
+# the Railway edge). Required for correct per-IP login lockout and HTTPS
+# detection (HSTS). Only the platform edge can reach the container, so
+# trusting all forwarded IPs is safe here.
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
