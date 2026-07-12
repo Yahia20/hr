@@ -1,5 +1,5 @@
 """Shared pytest fixtures. Environment must be configured before the app is
-imported, because the app reads config (DB path, attendance flags) at import."""
+imported, because the app reads config (DB path etc.) at import."""
 import os
 import sys
 import tempfile
@@ -11,10 +11,6 @@ sys.path.insert(0, str(BACKEND))
 os.environ.setdefault("HR_DB_FILE", os.path.join(tempfile.mkdtemp(), "test_hr.db"))
 os.environ.setdefault("HR_BOOTSTRAP_ADMIN_EMAIL", "admin@test.com")
 os.environ.setdefault("HR_BOOTSTRAP_ADMIN_PASSWORD", "password123")
-# Biometric off so the clock flows are testable without a real authenticator;
-# individual tests flip it on via monkeypatch. Geofence on to exercise it.
-os.environ.setdefault("ATTENDANCE_REQUIRE_BIOMETRIC", "false")
-os.environ.setdefault("ATTENDANCE_REQUIRE_GEOFENCE", "true")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -48,22 +44,9 @@ def admin(client):
     return login(*ADMIN)
 
 
-@pytest.fixture(autouse=True)
-def _clean_offices(admin):
-    """Every test starts with no geofence offices and no office networks; tests
-    opt in explicitly. Networks are cleared too so a leftover one can't flag
-    (off_network) punches made by unrelated tests."""
-    for o in admin.get("/api/attendance/offices").json():
-        admin.delete(f"/api/attendance/offices/{o['id']}", headers=csrf(admin))
-    for n in admin.get("/api/attendance/networks").json():
-        admin.delete(f"/api/attendance/networks/{n['id']}", headers=csrf(admin))
-    yield
-
-
 @pytest.fixture
 def new_employee(admin):
-    """Create a fresh employee (unique email) and return a logged-in client.
-    Fresh each call so per-user-per-day clock-in state never collides."""
+    """Create a fresh employee (unique email) and return a logged-in client."""
     def _make(name=None, role="employee", department="Ops"):
         _seq["n"] += 1
         email = f"emp{_seq['n']}@test.com"

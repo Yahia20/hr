@@ -13,8 +13,8 @@ os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
 @contextmanager
 def db():
     # timeout=30 makes a writer wait (up to 30s) for a competing write to finish
-    # instead of failing immediately with "database is locked" — important during
-    # the morning attendance clock-in spike when many writes land at once.
+    # instead of failing immediately with "database is locked" when several
+    # writes land at once.
     conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -100,75 +100,6 @@ def init_db() -> None:
                 used       INTEGER NOT NULL DEFAULT 0
             );
 
-            -- Geofence anchors for attendance: clocking in/out must happen
-            -- within radius_m of one of these (when geofencing is enabled).
-            CREATE TABLE IF NOT EXISTS office_locations (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                name       TEXT    NOT NULL,
-                lat        REAL    NOT NULL,
-                lng        REAL    NOT NULL,
-                radius_m   INTEGER NOT NULL DEFAULT 150,
-                created_at TEXT    NOT NULL
-            );
-
-            -- Office networks: the public IP / CIDR ranges a punch is expected to
-            -- come from when the employee is on the office network (e.g. the office
-            -- Wi-Fi's egress IP). Advisory only — a punch from outside is flagged
-            -- for HR review, never blocked.
-            CREATE TABLE IF NOT EXISTS office_networks (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                label      TEXT    NOT NULL DEFAULT '',
-                cidr       TEXT    NOT NULL,
-                created_at TEXT    NOT NULL
-            );
-
-            -- One row per user per work day (first clock-in / last clock-out).
-            -- Times are stored in UTC; work_date is the local business day.
-            CREATE TABLE IF NOT EXISTS attendance (
-                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                work_date           TEXT    NOT NULL,
-                clock_in_at         TEXT    NOT NULL,
-                clock_in_lat        REAL,
-                clock_in_lng        REAL,
-                clock_in_accuracy   REAL,
-                clock_in_office     TEXT    NOT NULL DEFAULT '',
-                clock_in_distance_m REAL,
-                clock_in_verified   INTEGER NOT NULL DEFAULT 0,
-                clock_out_at        TEXT,
-                clock_out_lat       REAL,
-                clock_out_lng       REAL,
-                clock_out_accuracy  REAL,
-                clock_out_office    TEXT    NOT NULL DEFAULT '',
-                clock_out_distance_m REAL,
-                clock_out_verified  INTEGER NOT NULL DEFAULT 0,
-                UNIQUE (user_id, work_date)
-            );
-            CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance (work_date);
-
-            -- WebAuthn (device fingerprint/biometric) credentials; binary parts
-            -- are stored base64url-encoded.
-            CREATE TABLE IF NOT EXISTS webauthn_credentials (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                credential_id TEXT    UNIQUE NOT NULL,
-                public_key    TEXT    NOT NULL,
-                sign_count    INTEGER NOT NULL DEFAULT 0,
-                transports    TEXT    NOT NULL DEFAULT '',
-                device_label  TEXT    NOT NULL DEFAULT '',
-                created_at    TEXT    NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials (user_id);
-
-            -- Short-lived WebAuthn challenges (one active per user per purpose).
-            CREATE TABLE IF NOT EXISTS webauthn_challenges (
-                user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                purpose    TEXT    NOT NULL CHECK (purpose IN ('register','clock')),
-                challenge  TEXT    NOT NULL,
-                expires_at TEXT    NOT NULL,
-                PRIMARY KEY (user_id, purpose)
-            );
-
             -- Early-leave permissions (استئذان): each employee gets a small
             -- monthly quota. month_key (YYYY-MM) drives the per-month allowance;
             -- attachment (base64) holds the supporting paper and is HR-manager
@@ -187,28 +118,16 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_permissions_emp_month
                 ON permissions (employee_name, month_key);
+
+            -- The attendance feature (clock in/out, geofencing, WebAuthn
+            -- fingerprints) was removed; drop its tables from existing DBs.
+            DROP TABLE IF EXISTS attendance;
+            DROP TABLE IF EXISTS office_locations;
+            DROP TABLE IF EXISTS office_networks;
+            DROP TABLE IF EXISTS webauthn_credentials;
+            DROP TABLE IF EXISTS webauthn_challenges;
             """
         )
-        # Lightweight additive migrations for columns added to existing tables
-        # (CREATE TABLE IF NOT EXISTS never alters an already-created table).
-        _ensure_columns(raw, "attendance", {
-            "clock_in_ip": "TEXT NOT NULL DEFAULT ''",
-            "clock_out_ip": "TEXT NOT NULL DEFAULT ''",
-            "clock_in_edge": "INTEGER NOT NULL DEFAULT 0",
-            "clock_out_edge": "INTEGER NOT NULL DEFAULT 0",
-            # NULL = no office networks configured (feature off); 1/0 = on/off the
-            # office network at punch time. Derived fact, kept past the IP purge.
-            "clock_in_on_network": "INTEGER",
-            "clock_out_on_network": "INTEGER",
-        })
         raw.commit()
     finally:
         raw.close()
-
-
-def _ensure_columns(conn, table: str, columns: dict[str, str]) -> None:
-    """Idempotently ADD COLUMN for any of `columns` missing from `table`."""
-    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    for name, ddl in columns.items():
-        if name not in existing:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")

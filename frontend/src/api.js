@@ -61,6 +61,7 @@ export const api = {
     const qs = new URLSearchParams({ employee_name, category, incident }).toString();
     return req(`/violations/preview?${qs}`);
   },
+  violationProof: (id) => req(`/violations/${id}/proof`),
 
   dashboard: () => req("/stats/dashboard"),
   matrix: () => req("/matrix"),
@@ -69,34 +70,6 @@ export const api = {
   sendTestEmail: (to) => req("/settings/test-email", { method: "POST", body: JSON.stringify({ to: to || null }) }),
 
   exportViolations: async (filters = {}) => downloadXlsx("/violations/export", filters, "violations"),
-
-  // Attendance (clock in/out)
-  attMe: () => req("/attendance/me"),
-  clockIn: (data) => req("/attendance/clock-in", { method: "POST", body: JSON.stringify(data) }),
-  clockOut: (data) => req("/attendance/clock-out", { method: "POST", body: JSON.stringify(data) }),
-  listAttendance: (filters = {}) => {
-    const qs = new URLSearchParams(
-      Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")
-    ).toString();
-    return req(`/attendance${qs ? `?${qs}` : ""}`);
-  },
-  exportAttendance: (filters = {}) => downloadXlsx("/attendance/export", filters, "attendance"),
-
-  listOffices: () => req("/attendance/offices"),
-  createOffice: (data) => req("/attendance/offices", { method: "POST", body: JSON.stringify(data) }),
-  deleteOffice: (id) => req(`/attendance/offices/${id}`, { method: "DELETE" }),
-
-  // Office networks (Wi-Fi egress IP allow-list) — advisory presence check
-  listNetworks: () => req("/attendance/networks"),
-  createNetwork: (data) => req("/attendance/networks", { method: "POST", body: JSON.stringify(data) }),
-  deleteNetwork: (id) => req(`/attendance/networks/${id}`, { method: "DELETE" }),
-  myIp: () => req("/attendance/my-ip"),
-
-  waRegisterBegin: () => req("/attendance/webauthn/register/begin", { method: "POST" }),
-  waRegisterComplete: (data) => req("/attendance/webauthn/register/complete", { method: "POST", body: JSON.stringify(data) }),
-  waClockBegin: () => req("/attendance/webauthn/clock/begin", { method: "POST" }),
-  listWaCredentials: () => req("/attendance/webauthn/credentials"),
-  deleteWaCredential: (id) => req(`/attendance/webauthn/credentials/${id}`, { method: "DELETE" }),
 
   // Early-leave permissions (استئذان)
   listPermissions: (month) => req(`/permissions${month ? `?month=${month}` : ""}`),

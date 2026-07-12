@@ -9,7 +9,7 @@ import ViolationsTable from "./ViolationsTable";
 import { BarList, PenaltyDist, PENALTY_LEVELS } from "../charts";
 import { useToast } from "../toast";
 import { useDebouncedValue, useFocusSearch, usePagination } from "../hooks";
-import { exportViolationsPdf } from "../pdf";
+import { exportViolationsPdf, proofDataUrl } from "../pdf";
 
 export default function Reports({ lang, user }) {
   const ar = lang === "ar";
@@ -103,9 +103,28 @@ export default function Reports({ lang, user }) {
     }
   }
 
-  function exportPdf() {
-    const ok = exportViolationsPdf({ rows: searched, t, ar, filters });
-    toast(ok ? "ok" : "warn", ok ? t("exportOk") : t("popupBlocked"));
+  const [pdfBusy, setPdfBusy] = useState(false);
+
+  async function exportPdf() {
+    setPdfBusy(true);
+    try {
+      // Pull the proof images (stored separately from the list payload) so the
+      // report shows each violation's uploaded attachment under its row.
+      const proofs = {};
+      await Promise.all(
+        searched.filter((r) => r.has_proof).map(async (r) => {
+          try {
+            const p = await api.violationProof(r.id);
+            const src = proofDataUrl(p.proof_image);
+            if (src) proofs[r.id] = src;
+          } catch { /* row still exports, just without its image */ }
+        })
+      );
+      const ok = exportViolationsPdf({ rows: searched, t, ar, filters, proofs });
+      toast(ok ? "ok" : "warn", ok ? t("exportOk") : t("popupBlocked"));
+    } finally {
+      setPdfBusy(false);
+    }
   }
 
   return (
@@ -121,7 +140,7 @@ export default function Reports({ lang, user }) {
             <input ref={searchRef} style={{ ...inp, padding: "10px 14px 10px 14px", paddingInlineStart: 36, width: 190 }} placeholder={t("search")} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t("search")} />
           </div>
           <BtnSec onClick={() => setFilterOpen(!filterOpen)}>{IC.filter} <span>{t("filters")}</span></BtnSec>
-          {isHR && <BtnSec onClick={exportPdf}>{IC.dl} <span>{t("exportPdf")}</span></BtnSec>}
+          {isHR && <BtnSec onClick={exportPdf} disabled={pdfBusy}>{IC.dl} <span>{pdfBusy ? "…" : t("exportPdf")}</span></BtnSec>}
           {isHR && <BtnPri onClick={exportExcel}>{IC.dl} <span>{t("export")}</span></BtnPri>}
         </div>
       </div>
@@ -182,7 +201,7 @@ export default function Reports({ lang, user }) {
         </Card>
       </div>
 
-      <ViolationsTable pg={pg} loading={loading} total={searched.length} canDelete={canDelete} onDelete={setConfirmId} ar={ar} lang={lang} t={t} />
+      <ViolationsTable pg={pg} loading={loading} total={searched.length} canDelete={canDelete} canViewProof={isHR} onDelete={setConfirmId} ar={ar} lang={lang} t={t} />
 
       <ConfirmModal
         open={confirmId !== null}

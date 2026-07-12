@@ -108,8 +108,8 @@ export const BtnPri = ({ children, onClick, wide, disabled }) => (
   <button onClick={onClick} disabled={disabled} style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: wide ? 12 : "9px 18px", borderRadius: S.r2, border: "none", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.6 : 1, fontSize: wide ? 14 : 13, fontWeight: 600, transition: S.tr, fontFamily: "inherit", whiteSpace: "nowrap", background: S.pri, color: "#fff", boxShadow: "0 2px 8px rgba(47,184,158,.25)", width: wide ? "100%" : "auto", justifyContent: "center" }}>{children}</button>
 );
 
-export const BtnSec = ({ children, onClick }) => (
-  <button onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: S.r2, border: `1px solid ${S.g200}`, cursor: "pointer", fontSize: 13, fontWeight: 600, transition: S.tr, fontFamily: "inherit", whiteSpace: "nowrap", background: S.w, color: S.g600 }}>{children}</button>
+export const BtnSec = ({ children, onClick, disabled }) => (
+  <button onClick={onClick} disabled={disabled} style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "9px 18px", borderRadius: S.r2, border: `1px solid ${S.g200}`, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.6 : 1, fontSize: 13, fontWeight: 600, transition: S.tr, fontFamily: "inherit", whiteSpace: "nowrap", background: S.w, color: S.g600 }}>{children}</button>
 );
 
 export const BtnGhost = ({ children, onClick }) => (
@@ -144,7 +144,7 @@ Pager.propTypes = {
   label: PropTypes.string,
 };
 BtnPri.propTypes = { children: PropTypes.node, onClick: PropTypes.func, wide: PropTypes.bool, disabled: PropTypes.bool };
-BtnSec.propTypes = { children: PropTypes.node, onClick: PropTypes.func };
+BtnSec.propTypes = { children: PropTypes.node, onClick: PropTypes.func, disabled: PropTypes.bool };
 BtnGhost.propTypes = { children: PropTypes.node, onClick: PropTypes.func };
 Th.propTypes = { children: PropTypes.node, ar: PropTypes.bool };
 FG.propTypes = { label: PropTypes.string, children: PropTypes.node };
