@@ -5,13 +5,14 @@ engine (reminders.py) compute status identically — one source of truth."""
 from datetime import date, datetime
 from typing import Optional
 
-# Days remaining until end_date:
-#   > YELLOW_DAYS       -> green
-#   RED_DAYS+1..YELLOW  -> yellow  (within two weeks)
-#   0..RED_DAYS         -> red     (within one week)
-#   past end_date       -> expired
-RED_DAYS = 7
+# Default thresholds (days remaining until end_date):
+#   > yellow_days           -> green
+#   red_days+1..yellow_days -> yellow  (within two weeks by default)
+#   0..red_days             -> red     (within one week by default)
+#   past end_date           -> expired
+# Per-category overrides live in doc_config.py (editable in Settings).
 YELLOW_DAYS = 14
+RED_DAYS = 7
 
 # Statuses that need a human to act (green = fine, unknown = unparseable date).
 ATTENTION_STATUSES = ("expired", "red", "yellow")
@@ -21,8 +22,14 @@ def today() -> date:
     return datetime.now().date()
 
 
-def compute_status(end_date: str, ref: Optional[date] = None) -> dict:
-    """Traffic-light status + signed days remaining, derived from end_date."""
+def compute_status(
+    end_date: str,
+    yellow_days: int = YELLOW_DAYS,
+    red_days: int = RED_DAYS,
+    ref: Optional[date] = None,
+) -> dict:
+    """Traffic-light status + signed days remaining, derived from end_date and the
+    (optionally per-category) yellow/red thresholds."""
     ref = ref or today()
     try:
         end = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -31,9 +38,9 @@ def compute_status(end_date: str, ref: Optional[date] = None) -> dict:
     days = (end - ref).days
     if days < 0:
         status = "expired"
-    elif days <= RED_DAYS:
+    elif days <= red_days:
         status = "red"
-    elif days <= YELLOW_DAYS:
+    elif days <= yellow_days:
         status = "yellow"
     else:
         status = "green"

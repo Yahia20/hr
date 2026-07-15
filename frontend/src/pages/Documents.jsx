@@ -6,6 +6,7 @@ import { IC } from "../icons";
 import { Card, Empty, SkeletonRows, BtnPri, BtnSec, Th, FG, inp } from "../components";
 import { Modal, ConfirmModal } from "../modal";
 import { useToast } from "../toast";
+import { exportDocumentsPdf } from "../pdf";
 
 const ALLOWED = ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"];
 const EMPTY_FILE = { name: "", b64: "", mime: "" };
@@ -43,6 +44,72 @@ export function daysText(t, doc) {
   if (doc.status === "expired") return t("expiredAgoN").replace("{n}", Math.abs(n));
   if (n === 0) return t("expiresTodayL");
   return t("expiresInN").replace("{n}", n);
+}
+
+// Hijri (Umm al-Qura) rendering of a YYYY-MM-DD date — relevant for KSA iqamas.
+export function hijri(dateStr, ar) {
+  if (!dateStr) return "";
+  try {
+    const locale = ar ? "ar-SA-u-ca-islamic-umalqura" : "en-US-u-ca-islamic-umalqura";
+    return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${dateStr}T00:00:00`));
+  } catch {
+    return "";
+  }
+}
+
+// A document flattened into the labelled shape the PDF export expects.
+function toPdfRow(t, ar, d) {
+  return {
+    primary: docPrimaryLabel(t, d),
+    category: t(CATEGORY_LABEL_KEY[d.category] || d.category),
+    start: d.start_date,
+    end: d.end_date,
+    status: d.status,
+    statusLabel: t(STATUS_KEY[d.status] || "stUnknown"),
+    days: daysText(t, d),
+    hijri: hijri(d.end_date, ar),
+  };
+}
+
+function ExportBar({ t, onExcel, onPdf }) {
+  return (
+    <div style={{ display: "flex", gap: 8 }}>
+      <BtnSec onClick={onExcel}>{IC.dl} <span>{t("export")}</span></BtnSec>
+      <BtnSec onClick={onPdf}>{IC.dl} <span>{t("exportPdf")}</span></BtnSec>
+    </div>
+  );
+}
+
+function HistoryModal({ open, doc, t, ar, onClose }) {
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    if (!doc) { setRows(null); return; }
+    setRows(null);
+    api.documentHistory(doc.id).then(setRows).catch(() => setRows([]));
+  }, [doc]);
+  return (
+    <Modal open={open} onClose={onClose} title={`${t("history")} — ${doc ? docPrimaryLabel(t, doc) : ""}`}>
+      {rows === null ? (
+        <div style={{ padding: 8, color: S.g400 }}>…</div>
+      ) : rows.length === 0 ? (
+        <Empty text={t("noHistory")} />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 8 }}>
+          {rows.map((h) => (
+            <div key={h.id} style={{ padding: "10px 12px", borderRadius: S.r2, border: `1px solid ${S.g100}`, background: S.g50 }}>
+              <div style={{ direction: "ltr", fontSize: 13, fontWeight: 600, color: S.g700, textAlign: ar ? "right" : "left" }}>
+                {h.old_end} → {h.new_end}
+              </div>
+              <div style={{ fontSize: 11.5, color: S.g400, marginTop: 3 }}>{h.changed_by} · {h.changed_at}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ textAlign: "end" }}>
+        <BtnSec onClick={onClose}><span>{t("close")}</span></BtnSec>
+      </div>
+    </Modal>
+  );
 }
 
 export function ExpiryBadge({ t, doc }) {
@@ -143,7 +210,7 @@ function DocModal({ open, ctx, onClose, onSaved, t, ar }) {
 }
 
 // A cell/row rendering a single tracked document (or an "add" prompt when empty).
-function DocLine({ t, doc, isManager, onAdd, onEdit, onView, onDelete, busyAttach }) {
+function DocLine({ t, ar, doc, isManager, onAdd, onEdit, onView, onDelete, onHistory, busyAttach }) {
   if (!doc) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -152,12 +219,17 @@ function DocLine({ t, doc, isManager, onAdd, onEdit, onView, onDelete, busyAttac
       </div>
     );
   }
+  const hj = hijri(doc.end_date, ar);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
       <ExpiryBadge t={t} doc={doc} />
-      <span style={{ direction: "ltr", fontWeight: 600, color: S.g700, fontSize: 12.5 }}>{doc.end_date}</span>
+      <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.25 }}>
+        <span style={{ direction: "ltr", fontWeight: 600, color: S.g700, fontSize: 12.5, textAlign: ar ? "right" : "left" }}>{doc.end_date}</span>
+        {hj && <span style={{ fontSize: 10.5, color: S.g400 }}>{hj}</span>}
+      </span>
       <span style={{ color: S.g400, fontSize: 12 }}>{daysText(t, doc)}</span>
       <button onClick={onEdit} style={chipBtn(S.info)}>{t("renew")}</button>
+      {onHistory && <button onClick={onHistory} title={t("history")} style={chipBtn(S.g500)}>{t("history")}</button>}
       {doc.has_attachment && isManager && (
         <button onClick={onView} disabled={busyAttach === doc.id} title={t("viewAttach")} style={chipBtn(S.info)}>{IC.clip} <span>{t("attach")}</span></button>
       )}
@@ -205,6 +277,7 @@ export function EmployeeDocs({ lang, user, onChanged }) {
   const [ctx, setCtx] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [histDoc, setHistDoc] = useState(null);
 
   async function load() {
     try {
@@ -256,10 +329,22 @@ export function EmployeeDocs({ lang, user, onChanged }) {
     }
   }
 
+  async function exportExcel() {
+    try { await api.exportDocuments({ scope: "employee" }); toast("ok", t("exportOk")); }
+    catch { toast("err", t("errGeneric")); }
+  }
+  function exportPdf() {
+    const rows = [...iqamas, ...contracts].map((d) => toPdfRow(t, ar, d));
+    if (!exportDocumentsPdf({ rows, t, ar, title: t("edocs") })) toast("err", t("popupBlocked"));
+  }
+
   const loading = employees === null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <Header t={t} title={t("edocs")} sub={t("edocsSub")} />
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <Header t={t} title={t("edocs")} sub={t("edocsSub")} />
+        <ExportBar t={t} onExcel={exportExcel} onPdf={exportPdf} />
+      </div>
       <Legend t={t} />
       <Card flush>
         <div style={{ overflowX: "auto" }}>
@@ -279,17 +364,19 @@ export function EmployeeDocs({ lang, user, onChanged }) {
                       {e.department && <small style={{ display: "block", color: S.g400, fontWeight: 400 }}>{e.department}</small>}
                     </td>
                     <td style={{ padding: "12px 16px" }}>
-                      <DocLine t={t} doc={docs.iqama} isManager={isManager} busyAttach={busyAttach}
+                      <DocLine t={t} ar={ar} doc={docs.iqama} isManager={isManager} busyAttach={busyAttach}
                         onAdd={() => openFor(e.name, "iqama", null)}
                         onEdit={() => openFor(e.name, "iqama", docs.iqama)}
                         onView={() => viewAttachment(docs.iqama.id, t)}
+                        onHistory={() => setHistDoc(docs.iqama)}
                         onDelete={() => setConfirm(docs.iqama)} />
                     </td>
                     <td style={{ padding: "12px 16px" }}>
-                      <DocLine t={t} doc={docs.contract} isManager={isManager} busyAttach={busyAttach}
+                      <DocLine t={t} ar={ar} doc={docs.contract} isManager={isManager} busyAttach={busyAttach}
                         onAdd={() => openFor(e.name, "contract", null)}
                         onEdit={() => openFor(e.name, "contract", docs.contract)}
                         onView={() => viewAttachment(docs.contract.id, t)}
+                        onHistory={() => setHistDoc(docs.contract)}
                         onDelete={() => setConfirm(docs.contract)} />
                     </td>
                   </tr>
@@ -302,6 +389,7 @@ export function EmployeeDocs({ lang, user, onChanged }) {
       <DocModal open={ctx !== null} ctx={ctx} onClose={() => setCtx(null)} onSaved={() => { toast("ok", t("docSaved")); load(); }} t={t} ar={ar} />
       <ConfirmModal open={confirm !== null} onClose={() => setConfirm(null)} onConfirm={removeDoc} busy={deleting}
         title={t("confirmDel")} body={`${t("del")}: ${confirm?.title || ""} — ${t("irreversible")}`} confirmLabel={t("del")} cancelLabel={t("cancel")} />
+      <HistoryModal open={histDoc !== null} doc={histDoc} t={t} ar={ar} onClose={() => setHistDoc(null)} />
     </div>
   );
 }
@@ -322,6 +410,7 @@ export function CompanyDocs({ lang, user, onChanged }) {
   const [ctx, setCtx] = useState(null);
   const [confirm, setConfirm] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [histDoc, setHistDoc] = useState(null);
 
   async function load() {
     setDocs(null);
@@ -356,9 +445,21 @@ export function CompanyDocs({ lang, user, onChanged }) {
     { id: "license", label: t("tabLicenses") },
   ];
 
+  async function exportExcel() {
+    try { await api.exportDocuments({ category: tab }); toast("ok", t("exportOk")); }
+    catch { toast("err", t("errGeneric")); }
+  }
+  function exportPdf() {
+    const rows = (docs || []).map((d) => toPdfRow(t, ar, d));
+    if (!exportDocumentsPdf({ rows, t, ar, title: t("cdocs") })) toast("err", t("popupBlocked"));
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <Header t={t} title={t("cdocs")} sub={t("cdocsSub")} />
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+        <Header t={t} title={t("cdocs")} sub={t("cdocsSub")} />
+        <ExportBar t={t} onExcel={exportExcel} onPdf={exportPdf} />
+      </div>
       <Legend t={t} />
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {tabs.map((tb) => (
@@ -374,24 +475,25 @@ export function CompanyDocs({ lang, user, onChanged }) {
         <RentGrid t={t} ar={ar} docs={docs} isManager={isManager} busyAttach={busyAttach}
           onAdd={(slot) => setCtx({ category: "rent", owner: slot.owner, title: t(slot.key), titleEditable: false, doc: null, heading: t(slot.key) })}
           onEdit={(slot, doc) => setCtx({ category: "rent", owner: slot.owner, title: t(slot.key), titleEditable: false, doc, heading: t(slot.key) })}
-          onView={viewAttachment} onDelete={setConfirm} />
+          onView={viewAttachment} onDelete={setConfirm} onHistory={setHistDoc} />
       ) : (
         <OpenList t={t} ar={ar} docs={docs} isManager={isManager} busyAttach={busyAttach}
           addLabel={tab === "vehicle" ? t("addVehicle") : t("addLicense")}
           titleLabel={tab === "vehicle" ? t("vehicleName") : t("licenseName")}
           onAdd={() => setCtx({ category: tab, owner: "", title: "", titleEditable: true, titleLabel: tab === "vehicle" ? t("vehicleName") : t("licenseName"), doc: null, heading: tab === "vehicle" ? t("addVehicle") : t("addLicense") })}
           onEdit={(doc) => setCtx({ category: tab, owner: doc.owner, title: doc.title, titleEditable: true, titleLabel: tab === "vehicle" ? t("vehicleName") : t("licenseName"), doc, heading: doc.title || t("editDoc") })}
-          onView={viewAttachment} onDelete={setConfirm} />
+          onView={viewAttachment} onDelete={setConfirm} onHistory={setHistDoc} />
       )}
 
       <DocModal open={ctx !== null} ctx={ctx} onClose={() => setCtx(null)} onSaved={onSaved} t={t} ar={ar} />
       <ConfirmModal open={confirm !== null} onClose={() => setConfirm(null)} onConfirm={removeDoc} busy={deleting}
         title={t("confirmDel")} body={`${t("del")}: ${confirm?.title || ""} — ${t("irreversible")}`} confirmLabel={t("del")} cancelLabel={t("cancel")} />
+      <HistoryModal open={histDoc !== null} doc={histDoc} t={t} ar={ar} onClose={() => setHistDoc(null)} />
     </div>
   );
 }
 
-function RentGrid({ t, docs, isManager, busyAttach, onAdd, onEdit, onView, onDelete }) {
+function RentGrid({ t, ar, docs, isManager, busyAttach, onAdd, onEdit, onView, onDelete, onHistory }) {
   const byOwner = useMemo(() => Object.fromEntries((docs || []).map((d) => [d.owner, d])), [docs]);
   const loading = docs === null;
   return (
@@ -405,9 +507,10 @@ function RentGrid({ t, docs, isManager, busyAttach, onAdd, onEdit, onView, onDel
               {loading ? (
                 <span style={{ color: S.g400, fontSize: 13 }}>…</span>
               ) : (
-                <DocLine t={t} doc={doc} isManager={isManager} busyAttach={busyAttach}
+                <DocLine t={t} ar={ar} doc={doc} isManager={isManager} busyAttach={busyAttach}
                   onAdd={() => onAdd(slot)} onEdit={() => onEdit(slot, doc)}
-                  onView={() => onView(doc.id, t)} onDelete={() => onDelete(doc)} />
+                  onView={() => onView(doc.id, t)} onDelete={() => onDelete(doc)}
+                  onHistory={doc ? () => onHistory(doc) : undefined} />
               )}
             </div>
           </Card>
@@ -417,7 +520,7 @@ function RentGrid({ t, docs, isManager, busyAttach, onAdd, onEdit, onView, onDel
   );
 }
 
-function OpenList({ t, ar, docs, isManager, busyAttach, addLabel, onAdd, onEdit, onView, onDelete }) {
+function OpenList({ t, ar, docs, isManager, busyAttach, addLabel, onAdd, onEdit, onView, onDelete, onHistory }) {
   const loading = docs === null;
   return (
     <Card flush>
@@ -439,8 +542,9 @@ function OpenList({ t, ar, docs, isManager, busyAttach, addLabel, onAdd, onEdit,
                   {doc.note && <small style={{ display: "block", color: S.g400, fontWeight: 400 }}>{doc.note}</small>}
                 </td>
                 <td style={{ padding: "12px 16px" }}>
-                  <DocLine t={t} doc={doc} isManager={isManager} busyAttach={busyAttach}
-                    onEdit={() => onEdit(doc)} onView={() => onView(doc.id, t)} onDelete={() => onDelete(doc)} />
+                  <DocLine t={t} ar={ar} doc={doc} isManager={isManager} busyAttach={busyAttach}
+                    onEdit={() => onEdit(doc)} onView={() => onView(doc.id, t)} onDelete={() => onDelete(doc)}
+                    onHistory={() => onHistory(doc)} />
                 </td>
                 <td style={{ padding: "12px 16px" }} />
               </tr>

@@ -143,6 +143,45 @@ def test_expiring_requires_hr(admin, new_employee):
     assert emp_user.get("/api/documents/expiring").status_code == 403
 
 
+def test_excel_export(admin):
+    _mk(admin, category="license", title="Export Me", end_date=_in(90))
+    r = admin.get("/api/documents/export?category=license")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert r.content[:2] == b"PK"  # xlsx is a zip container
+
+
+def test_renewal_history(admin):
+    did = _mk(admin, category="iqama", owner="Hist Worker", title="Iqama", end_date=_in(20)).json()["id"]
+    admin.patch(f"/api/documents/{did}", json={"end_date": _in(200)}, headers=csrf(admin))
+    admin.patch(f"/api/documents/{did}", json={"end_date": _in(400)}, headers=csrf(admin))
+    # A note-only edit must NOT create a history row.
+    admin.patch(f"/api/documents/{did}", json={"note": "just a note"}, headers=csrf(admin))
+
+    hist = admin.get(f"/api/documents/{did}/history").json()
+    assert len(hist) == 2
+    assert hist[0]["new_end"] == _in(400) and hist[0]["old_end"] == _in(200)  # newest first
+    assert hist[1]["new_end"] == _in(200) and hist[1]["old_end"] == _in(20)
+    assert hist[0]["changed_by"]  # records who renewed
+
+
+def test_per_category_thresholds(admin):
+    # Widen iqama's window: warn red within 30 days, yellow within 60.
+    r = admin.post("/api/settings/thresholds", json={"thresholds": {"iqama": {"yellow": 60, "red": 30}}}, headers=csrf(admin))
+    assert r.status_code == 200
+    assert admin.get("/api/settings/thresholds").json()["thresholds"]["iqama"] == {"yellow": 60, "red": 30}
+
+    # An iqama 20 days out is now RED (would be green under the 14/7 default)...
+    iq = _mk(admin, category="iqama", owner="Threshold Worker", title="Iqama", end_date=_in(20)).json()
+    assert iq["status"] == "red"
+    # ...while a license 20 days out still uses the default and is green.
+    lic = _mk(admin, category="license", title="Still Default", end_date=_in(20)).json()
+    assert lic["status"] == "green"
+
+    # Restore defaults so other tests see the original bands.
+    admin.post("/api/settings/thresholds", json={"thresholds": {"iqama": {"yellow": 14, "red": 7}}}, headers=csrf(admin))
+
+
 def test_auth_required_documents():
     from fastapi.testclient import TestClient
     from app.main import app

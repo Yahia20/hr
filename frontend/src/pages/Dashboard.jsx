@@ -6,7 +6,7 @@ import { IC } from "../icons";
 import { Card, Empty, KpiCard, KpiSkeleton, SkeletonRows, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
 import { useToast } from "../toast";
 import { BarList, PenaltyDist } from "../charts";
-import { ExpiryBadge, daysText, docPrimaryLabel, CATEGORY_LABEL_KEY } from "./Documents";
+import { ExpiryBadge, daysText, docPrimaryLabel, hijri, CATEGORY_LABEL_KEY } from "./Documents";
 
 export default function Dashboard({ lang, user, onNewV, onViewAll, docAlerts, onGoDocs }) {
   const ar = lang === "ar";
@@ -151,7 +151,10 @@ function DocAlerts({ t, ar, docAlerts, onGoDocs }) {
               <ExpiryBadge t={t} doc={d} />
               <span style={{ fontWeight: 600, color: S.g700, flex: 1, minWidth: 120 }}>{docPrimaryLabel(t, d)}</span>
               <span style={{ fontSize: 11.5, fontWeight: 600, color: S.g500, padding: "2px 8px", borderRadius: S.rF, background: S.g100, whiteSpace: "nowrap" }}>{t(CATEGORY_LABEL_KEY[d.category] || d.category)}</span>
-              <span style={{ direction: "ltr", fontSize: 12.5, fontWeight: 600, color: S.g700 }}>{d.end_date}</span>
+              <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.2 }}>
+                <span style={{ direction: "ltr", fontSize: 12.5, fontWeight: 600, color: S.g700, textAlign: ar ? "right" : "left" }}>{d.end_date}</span>
+                {hijri(d.end_date, ar) && <span style={{ fontSize: 10, color: S.g400 }}>{hijri(d.end_date, ar)}</span>}
+              </span>
               <span style={{ fontSize: 12, color: S.g400, whiteSpace: "nowrap" }}>{daysText(t, d)}</span>
             </div>
           ))}

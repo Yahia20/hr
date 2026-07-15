@@ -1,9 +1,12 @@
+import io
 import logging
 import sqlite3
 from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 
 from ..auth import (
     ROLE_HR_MANAGER,
@@ -12,7 +15,8 @@ from ..auth import (
     require_role,
 )
 from ..db import db
-from ..expiry import ATTENTION_STATUSES, compute_status as _status
+from ..doc_config import load_thresholds, thresholds_for
+from ..expiry import ATTENTION_STATUSES, compute_status
 from ..schemas import DOCUMENT_CATEGORIES, DocumentIn, DocumentUpdateIn
 
 logger = logging.getLogger("hr.documents")
@@ -22,14 +26,23 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 _hr_staff = require_role(ROLE_HR_MANAGER, ROLE_HR_OFFICER)
 _manager = require_role(ROLE_HR_MANAGER)
 
+# Categories shown on the "Employee Documents" page; the rest are company docs.
+_EMPLOYEE_CATEGORIES = {"iqama", "contract"}
+_COMPANY_CATEGORIES = {"rent", "vehicle", "license"}
+
 
 def _now() -> datetime:
     return datetime.now()
 
 
-def _public(row: dict) -> dict:
+def _status_for(row: dict, tmap: dict) -> dict:
+    yellow, red = thresholds_for(row["category"], tmap)
+    return compute_status(row["end_date"], yellow, red)
+
+
+def _public(row: dict, tmap: dict) -> dict:
     """A document record without the heavy/private attachment bytes, plus its
-    computed expiry status."""
+    computed expiry status (using the category's thresholds)."""
     return {
         "id": row["id"],
         "category": row["category"],
@@ -41,40 +54,15 @@ def _public(row: dict) -> dict:
         "has_attachment": bool(row["attachment"]),
         "created_by": row["created_by"],
         "created_at": row["created_at"],
-        **_status(row["end_date"]),
+        **_status_for(row, tmap),
     }
 
 
-@router.get("")
-def list_documents(
-    category: Optional[str] = Query(None),
-    owner: Optional[str] = Query(None),
-    _: CurrentUser = Depends(_hr_staff),
-):
-    """List tracked documents, newest expiry first. Filter by category and/or
-    owner. Attachment bytes are omitted — fetch one via /{id}/attachment."""
-    if category is not None and category not in DOCUMENT_CATEGORIES:
-        raise HTTPException(400, "unsupported document category")
-
-    clauses, params = [], []
-    if category is not None:
-        clauses.append("category = ?")
-        params.append(category)
-    if owner is not None:
-        clauses.append("owner = ?")
-        params.append(owner)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-
-    with db() as conn:
-        rows = conn.execute(
-            f"SELECT * FROM documents {where} ORDER BY end_date ASC, id DESC",
-            params,
-        ).fetchall()
-    return [_public(dict(r)) for r in rows]
-
-
-# Categories shown on the "Employee Documents" page; the rest are company docs.
-_EMPLOYEE_CATEGORIES = {"iqama", "contract"}
+def _xlsx_safe(value):
+    """Guard against CSV/formula injection when a cell is opened in Excel."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
 
 
 @router.get("/expiring")
@@ -82,14 +70,14 @@ def expiring_documents(_: CurrentUser = Depends(_hr_staff)):
     """Everything that needs attention (yellow / red / expired), most urgent
     first, plus counts. Powers the dashboard widget and the sidebar badges."""
     with db() as conn:
+        tmap = load_thresholds(conn)
         rows = conn.execute("SELECT * FROM documents").fetchall()
 
     items = []
     for r in rows:
-        pub = _public(dict(r))
+        pub = _public(dict(r), tmap)
         if pub["status"] in ATTENTION_STATUSES:
             items.append(pub)
-    # Most urgent first: fewest days left (expired = negative) leads.
     items.sort(key=lambda d: (d["days_left"] if d["days_left"] is not None else 1 << 30))
 
     counts = {"yellow": 0, "red": 0, "expired": 0}
@@ -101,9 +89,83 @@ def expiring_documents(_: CurrentUser = Depends(_hr_staff)):
     return {"counts": counts, "by_scope": scope, "items": items}
 
 
+def _query_rows(conn, category: Optional[str], owner: Optional[str], scope: Optional[str]):
+    clauses, params = [], []
+    if category is not None:
+        clauses.append("category = ?")
+        params.append(category)
+    if owner is not None:
+        clauses.append("owner = ?")
+        params.append(owner)
+    if scope in ("employee", "company"):
+        cats = _EMPLOYEE_CATEGORIES if scope == "employee" else _COMPANY_CATEGORIES
+        clauses.append(f"category IN ({','.join('?' * len(cats))})")
+        params.extend(sorted(cats))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    return conn.execute(
+        f"SELECT * FROM documents {where} ORDER BY end_date ASC, id DESC", params
+    ).fetchall()
+
+
+@router.get("")
+def list_documents(
+    category: Optional[str] = Query(None),
+    owner: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None),
+    _: CurrentUser = Depends(_hr_staff),
+):
+    """List tracked documents, soonest expiry first. Filter by category, owner
+    and/or scope (employee | company). Attachment bytes are omitted."""
+    if category is not None and category not in DOCUMENT_CATEGORIES:
+        raise HTTPException(400, "unsupported document category")
+    with db() as conn:
+        tmap = load_thresholds(conn)
+        rows = _query_rows(conn, category, owner, scope)
+    return [_public(dict(r), tmap) for r in rows]
+
+
+@router.get("/export")
+def export_documents(
+    category: Optional[str] = Query(None),
+    owner: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None),
+    _: CurrentUser = Depends(_hr_staff),
+):
+    """Excel export of the (optionally filtered) documents, with computed status."""
+    if category is not None and category not in DOCUMENT_CATEGORIES:
+        raise HTTPException(400, "unsupported document category")
+    with db() as conn:
+        tmap = load_thresholds(conn)
+        rows = _query_rows(conn, category, owner, scope)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Documents"
+    ws.append(["Category", "Owner", "Title", "Start Date", "End Date",
+               "Status", "Days Left", "Note", "Created By", "Created At"])
+    for r in rows:
+        d = dict(r)
+        st = _status_for(d, tmap)
+        ws.append([
+            d["category"], _xlsx_safe(d["owner"]), _xlsx_safe(d["title"]),
+            d["start_date"], d["end_date"], st["status"], st["days_left"],
+            _xlsx_safe(d["note"]), _xlsx_safe(d["created_by"]), d["created_at"],
+        ])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"documents_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("", status_code=201)
 def create_document(payload: DocumentIn, user: CurrentUser = Depends(_hr_staff)):
     with db() as conn:
+        tmap = load_thresholds(conn)
         try:
             cur = conn.execute(
                 """INSERT INTO documents
@@ -117,7 +179,7 @@ def create_document(payload: DocumentIn, user: CurrentUser = Depends(_hr_staff))
                     user.name, _now().strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
-            return _public(dict(cur.fetchone()))
+            return _public(dict(cur.fetchone()), tmap)
         except sqlite3.IntegrityError:
             # Hit the (owner, category) slot uniqueness for iqama/contract/rent —
             # a record already exists; the caller should renew it (PATCH) instead.
@@ -125,9 +187,10 @@ def create_document(payload: DocumentIn, user: CurrentUser = Depends(_hr_staff))
 
 
 @router.patch("/{did}")
-def update_document(did: int, payload: DocumentUpdateIn, _: CurrentUser = Depends(_hr_staff)):
+def update_document(did: int, payload: DocumentUpdateIn, user: CurrentUser = Depends(_hr_staff)):
     fields = payload.model_dump(exclude_unset=True)
     with db() as conn:
+        tmap = load_thresholds(conn)
         row = conn.execute("SELECT * FROM documents WHERE id = ?", (did,)).fetchone()
         if row is None:
             raise HTTPException(404, "Document not found")
@@ -144,6 +207,16 @@ def update_document(did: int, payload: DocumentUpdateIn, _: CurrentUser = Depend
         if merged["end_date"] < merged["start_date"]:
             raise HTTPException(400, "end_date must be on or after start_date")
 
+        # Record a renewal in the history whenever the validity dates change.
+        if merged["start_date"] != row["start_date"] or merged["end_date"] != row["end_date"]:
+            conn.execute(
+                """INSERT INTO document_history
+                   (document_id, old_start, old_end, new_start, new_end, changed_by, changed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (did, row["start_date"], row["end_date"], merged["start_date"], merged["end_date"],
+                 user.name, _now().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+
         cur = conn.execute(
             """UPDATE documents SET
                    title = ?, start_date = ?, end_date = ?, note = ?,
@@ -155,13 +228,24 @@ def update_document(did: int, payload: DocumentUpdateIn, _: CurrentUser = Depend
                 did,
             ),
         )
-        return _public(dict(cur.fetchone()))
+        return _public(dict(cur.fetchone()), tmap)
+
+
+@router.get("/{did}/history")
+def document_history(did: int, _: CurrentUser = Depends(_hr_staff)):
+    """Past renewals (date changes) for a document, newest first."""
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM document_history WHERE document_id = ? ORDER BY id DESC", (did,)
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 @router.delete("/{did}", status_code=204)
 def delete_document(did: int, _: CurrentUser = Depends(_manager)):
     with db() as conn:
         conn.execute("DELETE FROM documents WHERE id = ?", (did,))
+        conn.execute("DELETE FROM document_history WHERE document_id = ?", (did,))
 
 
 @router.get("/{did}/attachment")

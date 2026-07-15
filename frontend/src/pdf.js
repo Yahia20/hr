@@ -95,3 +95,66 @@ export function exportViolationsPdf({ rows, t, ar, filters = {}, proofs = {} }) 
   win.document.close();
   return true;
 }
+
+const DOC_STATUS_COLOR = { green: "#16A34A", yellow: "#D97706", red: "#DC2626", expired: "#7F1D1D", unknown: "#94A3B8" };
+
+// Documents export. `rows` are pre-labelled: { primary, category, start, end,
+// status, statusLabel, days, hijri }.
+export function exportDocumentsPdf({ rows, t, ar, title }) {
+  const headers = [t("docTitle"), t("cat"), t("startDate"), t("endDate"), t("status")];
+  const body = rows.map((r) => `
+    <tr>
+      <td><b>${esc(r.primary)}</b></td>
+      <td>${esc(r.category)}</td>
+      <td>${esc(r.start)}</td>
+      <td>${esc(r.end)}${r.hijri ? `<div class="hijri">${esc(r.hijri)}</div>` : ""}</td>
+      <td><span class="dot" style="background:${DOC_STATUS_COLOR[r.status] || "#888"}"></span>${esc(r.statusLabel)}${r.days != null ? ` <span class="days">(${esc(r.days)})</span>` : ""}</td>
+    </tr>`).join("");
+
+  const html = `<!doctype html>
+<html lang="${ar ? "ar" : "en"}" dir="${ar ? "rtl" : "ltr"}">
+<head>
+<meta charset="utf-8">
+<title>${esc(title)} — Travel Gate</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: ${ar ? "'Noto Sans Arabic'," : ""}'DM Sans','Segoe UI',Tahoma,sans-serif; color: #273545; margin: 28px; font-size: 12px; }
+  .head { display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #2FB89E; padding-bottom: 12px; margin-bottom: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { width: 34px; height: 34px; border-radius: 9px; background: #2FB89E; color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 13px; }
+  h1 { font-size: 16px; margin: 0; }
+  .sub { color: #5F6E80; font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: ${ar ? "right" : "left"}; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: #5F6E80; border-bottom: 2px solid #ECEEF2; padding: 7px 8px; }
+  td { padding: 7px 8px; border-bottom: 1px solid #ECEEF2; vertical-align: top; }
+  tr { page-break-inside: avoid; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-inline-end: 5px; }
+  .hijri { color: #8896A5; font-size: 9.5px; margin-top: 2px; }
+  .days { color: #8896A5; }
+  .tot { margin-top: 14px; font-size: 11px; color: #5F6E80; }
+  @page { margin: 14mm; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="brand">
+      <div class="logo">TG</div>
+      <div><h1>${esc(title)}</h1><div class="sub">Travel Gate — ${esc(t("hrSys"))}</div></div>
+    </div>
+    <div class="sub">${new Date().toISOString().slice(0, 10)}</div>
+  </div>
+  <table>
+    <thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>
+    <tbody>${body}</tbody>
+  </table>
+  <div class="tot">${rows.length}</div>
+  <script>window.onload = function () { window.print(); };</script>
+</body>
+</html>`;
+
+  const win = window.open("", "_blank");
+  if (!win) return false;
+  win.document.write(html);
+  win.document.close();
+  return true;
+}

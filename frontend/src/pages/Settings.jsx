@@ -77,11 +77,32 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
   const [remSaving, setRemSaving] = useState(false);
   const [remSending, setRemSending] = useState(false);
 
+  const [thr, setThr] = useState(null);
+  const [thrSaving, setThrSaving] = useState(false);
+
   useEffect(() => {
     if (!isManager) return;
     api.getSettings().then(setSettings).catch(() => setSettings(null));
     api.getReminders().then((r) => { setRem(r); setRemTo(r.recipients || ""); }).catch(() => setRem(null));
+    api.getThresholds().then((r) => setThr(r.thresholds)).catch(() => setThr(null));
   }, [isManager]);
+
+  function setThrVal(cat, key, val) {
+    const n = Math.max(0, parseInt(val, 10) || 0);
+    setThr((m) => ({ ...m, [cat]: { ...m[cat], [key]: n } }));
+  }
+  async function saveThr() {
+    setThrSaving(true);
+    try {
+      const r = await api.setThresholds(thr);
+      setThr(r.thresholds);
+      toast("ok", t("savedOk"));
+    } catch (e) {
+      toast("err", e.message || t("errGeneric"));
+    } finally {
+      setThrSaving(false);
+    }
+  }
 
   async function saveRem(enabled) {
     setRemSaving(true);
@@ -213,6 +234,25 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
           {rem != null && !rem.email_configured && (
             <p style={{ fontSize: 12, color: S.g400, marginTop: 6 }}>{t("smtpEnvHint")}</p>
           )}
+        </Section>
+      )}
+
+      {/* Per-category alert thresholds — managers only */}
+      {isManager && thr && (
+        <Section icon={IC.clock} title={t("thrTitle")} sub={t("thrSub")}>
+          {[["iqama", "iqama"], ["contract", "contract"], ["rent", "catRent"], ["vehicle", "catVehicle"], ["license", "catLicense"]].map(([cat, key]) => (
+            <Row key={cat} title={t(key)} sub={t("thrRowSub")}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: S.warn }}>{t("yellow")}</span>
+                <input type="number" min="0" style={{ ...inp, width: 68 }} value={thr[cat]?.yellow ?? 0} onChange={(e) => setThrVal(cat, "yellow", e.target.value)} />
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: S.err }}>{t("red")}</span>
+                <input type="number" min="0" style={{ ...inp, width: 68 }} value={thr[cat]?.red ?? 0} onChange={(e) => setThrVal(cat, "red", e.target.value)} />
+              </div>
+            </Row>
+          ))}
+          <div style={{ marginTop: 16 }}>
+            <BtnPri onClick={saveThr} disabled={thrSaving}>{IC.check} <span>{thrSaving ? "…" : t("save")}</span></BtnPri>
+          </div>
         </Section>
       )}
     </div>

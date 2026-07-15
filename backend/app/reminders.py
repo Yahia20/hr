@@ -12,6 +12,7 @@ import re
 from datetime import datetime
 
 from .db import db
+from .doc_config import load_thresholds, thresholds_for
 from .emailer import email_configured, send_email
 from .expiry import ATTENTION_STATUSES, compute_status
 
@@ -81,12 +82,14 @@ def write_config(recipients: str, enabled: bool) -> dict:
 
 
 def collect_due(conn) -> list[dict]:
-    """Documents that need attention, most urgent first."""
+    """Documents that need attention, most urgent first (per-category thresholds)."""
+    tmap = load_thresholds(conn)
     rows = conn.execute("SELECT * FROM documents").fetchall()
     items = []
     for r in rows:
         d = dict(r)
-        st = compute_status(d["end_date"])
+        yellow, red = thresholds_for(d["category"], tmap)
+        st = compute_status(d["end_date"], yellow, red)
         if st["status"] in ATTENTION_STATUSES:
             items.append({**d, **st})
     items.sort(key=lambda d: d["days_left"] if d["days_left"] is not None else 1 << 30)
