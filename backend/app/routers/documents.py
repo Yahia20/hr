@@ -1,6 +1,6 @@
 import logging
 import sqlite3
-from datetime import date, datetime
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +12,7 @@ from ..auth import (
     require_role,
 )
 from ..db import db
+from ..expiry import ATTENTION_STATUSES, compute_status as _status
 from ..schemas import DOCUMENT_CATEGORIES, DocumentIn, DocumentUpdateIn
 
 logger = logging.getLogger("hr.documents")
@@ -21,40 +22,9 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 _hr_staff = require_role(ROLE_HR_MANAGER, ROLE_HR_OFFICER)
 _manager = require_role(ROLE_HR_MANAGER)
 
-# Traffic-light thresholds (days remaining until end_date):
-#   > YELLOW_DAYS         -> green   (طول السنة أخضر)
-#   RED_DAYS+1..YELLOW    -> yellow  (قبل الانتهاء بأسبوعين)
-#   0..RED_DAYS           -> red     (قبلها بأسبوع)
-#   past end_date         -> expired
-RED_DAYS = 7
-YELLOW_DAYS = 14
-
 
 def _now() -> datetime:
     return datetime.now()
-
-
-def _today() -> date:
-    return _now().date()
-
-
-def _status(end_date: str, today: Optional[date] = None) -> dict:
-    """Traffic-light status + signed days remaining, derived from end_date."""
-    today = today or _today()
-    try:
-        end = datetime.strptime(end_date, "%Y-%m-%d").date()
-    except ValueError:
-        return {"status": "unknown", "days_left": None}
-    days = (end - today).days
-    if days < 0:
-        status = "expired"
-    elif days <= RED_DAYS:
-        status = "red"
-    elif days <= YELLOW_DAYS:
-        status = "yellow"
-    else:
-        status = "green"
-    return {"status": status, "days_left": days}
 
 
 def _public(row: dict) -> dict:
@@ -105,8 +75,6 @@ def list_documents(
 
 # Categories shown on the "Employee Documents" page; the rest are company docs.
 _EMPLOYEE_CATEGORIES = {"iqama", "contract"}
-# Statuses that need a human to act (green = fine, unknown = unparseable).
-_ATTENTION = {"yellow", "red", "expired"}
 
 
 @router.get("/expiring")
@@ -119,7 +87,7 @@ def expiring_documents(_: CurrentUser = Depends(_hr_staff)):
     items = []
     for r in rows:
         pub = _public(dict(r))
-        if pub["status"] in _ATTENTION:
+        if pub["status"] in ATTENTION_STATUSES:
             items.append(pub)
     # Most urgent first: fewest days left (expired = negative) leads.
     items.sort(key=lambda d: (d["days_left"] if d["days_left"] is not None else 1 << 30))

@@ -154,6 +154,14 @@ def init_db() -> None:
                 ON documents (owner, category)
                 WHERE category IN ('iqama', 'contract', 'rent');
 
+            -- Small key/value store for operator-editable settings that don't
+            -- belong in env vars (e.g. the document-expiry reminder recipients,
+            -- so they can be changed from the UI without a redeploy).
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
+            );
+
             -- The attendance feature (clock in/out, geofencing, WebAuthn
             -- fingerprints) was removed; drop its tables from existing DBs.
             DROP TABLE IF EXISTS attendance;

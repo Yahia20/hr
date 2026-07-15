@@ -61,7 +61,7 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - Roles: `hr_manager` (everything), `hr_officer` (log/manage, no deletes or user admin), `dept_head` (read-only, own department), `employee` (own violations only)
 
 ## Database tables
-`init_db()` in `db.py` creates seven tables:
+`init_db()` in `db.py` creates eight tables:
 - `employees` — name (unique), email, department, manager_email
 - `violations` — employee_name, category, incident, penalty_color, penalty_label, deduction_hours, deduction_days, freeze_months, comment, submitted_by, proof_image (base64), created_at
 - `users` — email (unique), name, role (hr_manager/hr_officer/dept_head/employee), department, bcrypt password_hash, is_active, lockout columns
@@ -69,10 +69,13 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `password_resets` — SHA-256 of the reset token, user_id, expires_at, used
 - `permissions` — early-leave permissions (استئذان): employee_name, permission_date, month_key (drives the monthly quota), note, attachment (base64, HR-manager only), created_by, created_at
 - `documents` — expiry-tracked paperwork: category (iqama/contract/rent/vehicle/license), owner (employee name or asset key), title, start_date, end_date, note, attachment (base64, HR-manager only), created_by, created_at. Partial unique index on `(owner, category)` for the slot categories (iqama/contract/rent); status/days_left are derived from end_date, not stored
+- `app_settings` — small key/value store for operator-editable settings that don't belong in env vars (currently the document-expiry reminder recipients + on/off toggle + last-sent timestamp), so they can be changed from the UI without a redeploy
 
 The attendance feature (clock in/out, geofencing, office networks, WebAuthn fingerprints) was removed; `init_db()` drops its old tables (`attendance`, `office_locations`, `office_networks`, `webauthn_credentials`, `webauthn_challenges`) from existing databases.
 
-There is no `rules` table: the rules matrix lives in `penalties.py`. The first HR Manager account is seeded from `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` when the `users` table is empty. Failed logins are rate-limited per IP and per account (5 per 15 min each). Other env vars: `COOKIE_SECURE` (set `true` in prod), `APP_BASE_URL` (reset links), `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `CORS_ORIGINS`, `HR_DB_FILE`, `PERMISSION_MONTHLY_QUOTA` (default `2`).
+There is no `rules` table: the rules matrix lives in `penalties.py`. The first HR Manager account is seeded from `HR_BOOTSTRAP_ADMIN_EMAIL` / `HR_BOOTSTRAP_ADMIN_PASSWORD` when the `users` table is empty. Failed logins are rate-limited per IP and per account (5 per 15 min each). Other env vars: `COOKIE_SECURE` (set `true` in prod), `APP_BASE_URL` (reset links), `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `CORS_ORIGINS`, `HR_DB_FILE`, `PERMISSION_MONTHLY_QUOTA` (default `2`), `DOC_ALERT_EMAIL` (fallback digest recipients when none set in-app), `DOC_REMINDER_HOUR` (0-23, default `8`).
+
+Document-expiry email reminders: a daily background scheduler in `main.py` (fires once a day at `DOC_REMINDER_HOUR`) sends a digest of every attention-needing document (expired / ≤7 / ≤14 days) via `reminders.py`, reusing `emailer.py`. Recipients + on/off toggle live in `app_settings` and are edited from **Settings → Document expiry reminders**, which also has a **Send now** button (`POST /api/settings/reminders/run`); config is read/written via `GET`/`POST /api/settings/reminders` (HR Manager only).
 
 ## Production deployment (Railway, Docker)
 The `Dockerfile` builds the SPA and serves it from the FastAPI app (same origin). `railway.json` sets the healthcheck to `/health`. Full env reference is in `backend/.env.example`. Checklist before going live:

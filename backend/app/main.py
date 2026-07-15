@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -9,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .auth import bootstrap_admin
 from .db import init_db
+from .reminders import send_reminders
 from .routers import auth as auth_router
 from .routers import documents, employees, matrix, permissions, settings, stats, violations
 
@@ -44,12 +47,38 @@ def _check_production_config() -> None:
         )
 
 
+# Hour of day (0-23, server local time) to send the daily expiry digest.
+REMINDER_HOUR = int(os.environ.get("DOC_REMINDER_HOUR", "8"))
+
+
+async def _reminder_scheduler() -> None:
+    """Send the document-expiry digest once a day at REMINDER_HOUR. Best-effort:
+    exceptions are swallowed so a bad tick never kills the loop, and it fires at
+    most once per calendar day per running process."""
+    while True:
+        now = datetime.now()
+        target = now.replace(hour=REMINDER_HOUR, minute=0, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        try:
+            await asyncio.sleep((target - now).total_seconds())
+        except asyncio.CancelledError:
+            break
+        summary = send_reminders(require_enabled=True)
+        if summary.get("sent"):
+            logger.info("Daily document reminder sent: %s", summary)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
     bootstrap_admin()
     _check_production_config()
-    yield
+    task = asyncio.create_task(_reminder_scheduler())
+    try:
+        yield
+    finally:
+        task.cancel()
 
 
 app = FastAPI(title="HR Disciplinary API", version="1.0.0", lifespan=lifespan)

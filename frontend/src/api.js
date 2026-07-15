@@ -69,6 +69,10 @@ export const api = {
   getSettings: () => req("/settings"),
   sendTestEmail: (to) => req("/settings/test-email", { method: "POST", body: JSON.stringify({ to: to || null }) }),
 
+  getReminders: () => req("/settings/reminders"),
+  setReminders: (data) => req("/settings/reminders", { method: "POST", body: JSON.stringify(data) }),
+  runReminders: () => req("/settings/reminders/run", { method: "POST" }),
+
   exportViolations: async (filters = {}) => downloadXlsx("/violations/export", filters, "violations"),
 
   // Early-leave permissions (استئذان)
