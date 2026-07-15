@@ -24,6 +24,7 @@ backend/
 │   └── routers/            # API routes split by domain
 │       ├── auth.py          # login/logout/me, forgot/reset, user management
 │       ├── permissions.py   # early-leave permissions (استئذان) + attachments
+│       ├── documents.py     # expiry-tracked documents (iqama/contract/rent/vehicle/license)
 │       ├── employees.py
 │       ├── violations.py
 │       ├── stats.py
@@ -55,17 +56,19 @@ Routes are split into routers under `app/routers/`, all mounted at the `/api` pr
 - `POST /api/auth/login|logout`, `GET /api/auth/me`, `POST /api/auth/forgot|reset` — cookie-session auth
 - `GET/POST /api/auth/users`, `DELETE /api/auth/users/{id}` — user management (HR Manager only)
 - `GET/POST /api/permissions`, `DELETE /api/permissions/{id}`, `GET /api/permissions/{id}/attachment` — early-leave permissions (استئذان): per-employee monthly quota (default 2, `PERMISSION_MONTHLY_QUOTA`); list/create for HR staff, delete + attachment view for HR Manager only
+- `GET/POST /api/documents`, `PATCH/DELETE /api/documents/{id}`, `GET /api/documents/{id}/attachment` — expiry-tracked documents. One generic model backs five categories (`iqama`, `contract`, `rent`, `vehicle`, `license`), each with a start/end date + optional base64 attachment. The traffic-light `status` (green / yellow / red / expired) and `days_left` are computed from `end_date` at read time in `documents.py` (thresholds: ≤7 days red, ≤14 yellow, else green). `iqama`/`contract`/`rent` are one-per-owner "slots" (a partial unique index on `(owner, category)`; renew via PATCH, duplicate POST → 409 `slot_exists`); `vehicle`/`license` are open lists. List/create/renew for HR staff; delete + attachment view for HR Manager only. Frontend: two nav pages — **Employee Documents** (per-employee iqama + contract) and **Company Documents** (rents / vehicles / licenses tabs).
 - Auth is an httpOnly `hr_session` cookie + `X-CSRF-Token` header on mutations (double-submit `hr_csrf` cookie). Every endpoint declares role requirements via `require_user`/`require_role` from `auth.py`; `/health` and the login/forgot/reset endpoints are the only unguarded ones.
 - Roles: `hr_manager` (everything), `hr_officer` (log/manage, no deletes or user admin), `dept_head` (read-only, own department), `employee` (own violations only)
 
 ## Database tables
-`init_db()` in `db.py` creates six tables:
+`init_db()` in `db.py` creates seven tables:
 - `employees` — name (unique), email, department, manager_email
 - `violations` — employee_name, category, incident, penalty_color, penalty_label, deduction_hours, deduction_days, freeze_months, comment, submitted_by, proof_image (base64), created_at
 - `users` — email (unique), name, role (hr_manager/hr_officer/dept_head/employee), department, bcrypt password_hash, is_active, lockout columns
 - `sessions` — SHA-256 of the session cookie token, user_id, csrf_token, expires_at
 - `password_resets` — SHA-256 of the reset token, user_id, expires_at, used
 - `permissions` — early-leave permissions (استئذان): employee_name, permission_date, month_key (drives the monthly quota), note, attachment (base64, HR-manager only), created_by, created_at
+- `documents` — expiry-tracked paperwork: category (iqama/contract/rent/vehicle/license), owner (employee name or asset key), title, start_date, end_date, note, attachment (base64, HR-manager only), created_by, created_at. Partial unique index on `(owner, category)` for the slot categories (iqama/contract/rent); status/days_left are derived from end_date, not stored
 
 The attendance feature (clock in/out, geofencing, office networks, WebAuthn fingerprints) was removed; `init_db()` drops its old tables (`attendance`, `office_locations`, `office_networks`, `webauthn_credentials`, `webauthn_challenges`) from existing databases.
 

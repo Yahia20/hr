@@ -119,6 +119,41 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_permissions_emp_month
                 ON permissions (employee_name, month_key);
 
+            -- Expiry-tracked documents: one generic table backs every kind of
+            -- dated paperwork (employee residence permits / contracts, branch &
+            -- housing rents, vehicle insurance, and open-ended licenses). Each
+            -- row has a start/end date and an optional base64 attachment; the
+            -- traffic-light status (green/yellow/red/expired) is computed from
+            -- end_date at read time, not stored.
+            --   category : 'iqama' | 'contract' | 'rent' | 'vehicle' | 'license'
+            --   owner    : employee name (iqama/contract) or asset key
+            --              (rent branch: 'rawda'|'hamra'|'housing'); free for
+            --              vehicle/license.
+            --   title    : human-friendly label (esp. licenses & vehicles).
+            CREATE TABLE IF NOT EXISTS documents (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                category        TEXT    NOT NULL,
+                owner           TEXT    NOT NULL DEFAULT '',
+                title           TEXT    NOT NULL DEFAULT '',
+                start_date      TEXT    NOT NULL,
+                end_date        TEXT    NOT NULL,
+                note            TEXT    NOT NULL DEFAULT '',
+                attachment      TEXT    NOT NULL DEFAULT '',
+                attachment_name TEXT    NOT NULL DEFAULT '',
+                attachment_mime TEXT    NOT NULL DEFAULT '',
+                created_by      TEXT    NOT NULL DEFAULT '',
+                created_at      TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_documents_cat_end
+                ON documents (category, end_date);
+            -- "Slot" documents hold exactly one active record per owner: each
+            -- employee has one iqama + one contract, each rent branch one lease.
+            -- Renewals edit the row in place (PATCH). Vehicles & licenses are
+            -- open lists, so they're intentionally excluded from this constraint.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_slot_unique
+                ON documents (owner, category)
+                WHERE category IN ('iqama', 'contract', 'rent');
+
             -- The attendance feature (clock in/out, geofencing, WebAuthn
             -- fingerprints) was removed; drop its tables from existing DBs.
             DROP TABLE IF EXISTS attendance;

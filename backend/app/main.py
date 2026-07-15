@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from .auth import bootstrap_admin
 from .db import init_db
 from .routers import auth as auth_router
-from .routers import employees, matrix, permissions, settings, stats, violations
+from .routers import documents, employees, matrix, permissions, settings, stats, violations
 
 logger = logging.getLogger("hr")
 
@@ -61,7 +61,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
 )
 
@@ -94,6 +94,7 @@ app.include_router(stats.router, prefix="/api")
 app.include_router(matrix.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(permissions.router, prefix="/api")
+app.include_router(documents.router, prefix="/api")
 
 
 # Serve the built React SPA from the same origin as the API. The frontend talks

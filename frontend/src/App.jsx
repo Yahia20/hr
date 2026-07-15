@@ -11,6 +11,7 @@ import ErrorBoundary from "./ErrorBoundary";
 import { useHotkeys, useLocalStorage, useMediaQuery } from "./hooks";
 import Dashboard from "./pages/Dashboard";
 import Permissions from "./pages/Permissions";
+import { EmployeeDocs, CompanyDocs } from "./pages/Documents";
 import LogViolation from "./pages/LogViolation";
 import Employees from "./pages/Employees";
 import Reports from "./pages/Reports";
@@ -20,13 +21,13 @@ import Login from "./pages/Login";
 
 // Pages each role may open; the first entry is the role's landing page.
 const ROLE_PAGES = {
-  hr_manager: ["dash", "perm", "log", "emp", "rep", "users", "set"],
-  hr_officer: ["dash", "perm", "log", "emp", "rep"],
+  hr_manager: ["dash", "perm", "log", "emp", "edocs", "cdocs", "rep", "users", "set"],
+  hr_officer: ["dash", "perm", "log", "emp", "edocs", "cdocs", "rep"],
   dept_head: ["rep", "emp"],
   employee: ["rep"],
 };
 
-const NAV_ICONS = { dash: IC.dash, perm: IC.perm, log: IC.log, emp: IC.emp, rep: IC.rep, users: IC.emp, set: IC.set };
+const NAV_ICONS = { dash: IC.dash, perm: IC.perm, log: IC.log, emp: IC.emp, edocs: IC.idcard, cdocs: IC.building, rep: IC.rep, users: IC.emp, set: IC.set };
 
 // Single-key shortcuts (suppressed while typing in a field).
 const HOTKEY_PAGES = { d: "dash", n: "log", e: "emp", r: "rep" };
@@ -113,6 +114,8 @@ export default function HRSystem() {
   const PAGES = {
     dash: <Dashboard lang={lang} user={user} onNewV={() => nav("log")} onViewAll={() => nav("rep")} />,
     perm: <Permissions lang={lang} user={user} />,
+    edocs: <EmployeeDocs lang={lang} user={user} />,
+    cdocs: <CompanyDocs lang={lang} user={user} />,
     log: <LogViolation lang={lang} user={user} />,
     emp: <Employees lang={lang} user={user} onGoPerm={allowed.includes("perm") ? () => nav("perm") : undefined} />,
     rep: <Reports lang={lang} user={user} />,

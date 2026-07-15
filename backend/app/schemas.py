@@ -2,7 +2,7 @@ import base64
 import binascii
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 # 5 MB of raw image data, as base64 (4/3 expansion + padding slack).
 MAX_PROOF_B64_CHARS = 7_200_000
@@ -131,6 +131,104 @@ class PermissionIn(BaseModel):
     @field_validator("attachment_mime")
     @classmethod
     def _valid_mime(cls, v: str) -> str:
+        if v and v not in ALLOWED_ATTACHMENT_MIME:
+            raise ValueError("unsupported attachment type")
+        return v
+
+
+# Expiry-tracked documents. Every category shares one shape: a start/end date,
+# an optional attachment, and a title/owner. See routers/documents.py.
+DOCUMENT_CATEGORIES = {"iqama", "contract", "rent", "vehicle", "license"}
+
+
+class DocumentIn(BaseModel):
+    category: str = Field(..., min_length=1, max_length=30)
+    owner: str = Field("", max_length=120)
+    title: str = Field("", max_length=200)
+    start_date: str = Field(..., min_length=10, max_length=10)
+    end_date: str = Field(..., min_length=10, max_length=10)
+    note: str = Field("", max_length=500)
+    attachment: str = Field("", max_length=MAX_PROOF_B64_CHARS)
+    attachment_name: str = Field("", max_length=200)
+    attachment_mime: str = Field("", max_length=100)
+
+    @field_validator("category")
+    @classmethod
+    def _valid_category(cls, v: str) -> str:
+        if v not in DOCUMENT_CATEGORIES:
+            raise ValueError("unsupported document category")
+        return v
+
+    @field_validator("owner", "title")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _valid_date(cls, v: str) -> str:
+        if not _DATE_RE.match(v):
+            raise ValueError("dates must be formatted YYYY-MM-DD")
+        return v
+
+    @field_validator("attachment")
+    @classmethod
+    def _valid_b64(cls, v: str) -> str:
+        if not v:
+            return v
+        try:
+            base64.b64decode(v, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("attachment must be valid base64")
+        return v
+
+    @field_validator("attachment_mime")
+    @classmethod
+    def _valid_mime(cls, v: str) -> str:
+        if v and v not in ALLOWED_ATTACHMENT_MIME:
+            raise ValueError("unsupported attachment type")
+        return v
+
+    @model_validator(mode="after")
+    def _end_after_start(self):
+        if self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date")
+        return self
+
+
+class DocumentUpdateIn(BaseModel):
+    """Partial update for a renewal: change dates/note/title and optionally swap
+    the attachment. Every field is optional; only the supplied ones are applied.
+    An empty-string attachment clears the existing one."""
+    title: Optional[str] = Field(None, max_length=200)
+    start_date: Optional[str] = Field(None, min_length=10, max_length=10)
+    end_date: Optional[str] = Field(None, min_length=10, max_length=10)
+    note: Optional[str] = Field(None, max_length=500)
+    attachment: Optional[str] = Field(None, max_length=MAX_PROOF_B64_CHARS)
+    attachment_name: Optional[str] = Field(None, max_length=200)
+    attachment_mime: Optional[str] = Field(None, max_length=100)
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _valid_date(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not _DATE_RE.match(v):
+            raise ValueError("dates must be formatted YYYY-MM-DD")
+        return v
+
+    @field_validator("attachment")
+    @classmethod
+    def _valid_b64(cls, v: Optional[str]) -> Optional[str]:
+        if not v:
+            return v
+        try:
+            base64.b64decode(v, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("attachment must be valid base64")
+        return v
+
+    @field_validator("attachment_mime")
+    @classmethod
+    def _valid_mime(cls, v: Optional[str]) -> Optional[str]:
         if v and v not in ALLOWED_ATTACHMENT_MIME:
             raise ValueError("unsupported attachment type")
         return v

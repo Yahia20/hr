@@ -76,6 +76,18 @@ export const api = {
   createPermission: (data) => req("/permissions", { method: "POST", body: JSON.stringify(data) }),
   deletePermission: (id) => req(`/permissions/${id}`, { method: "DELETE" }),
   permissionAttachment: (id) => req(`/permissions/${id}/attachment`),
+
+  // Expiry-tracked documents (iqama / contract / rent / vehicle / license)
+  listDocuments: (filters = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    ).toString();
+    return req(`/documents${qs ? `?${qs}` : ""}`);
+  },
+  createDocument: (data) => req("/documents", { method: "POST", body: JSON.stringify(data) }),
+  updateDocument: (id, data) => req(`/documents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteDocument: (id) => req(`/documents/${id}`, { method: "DELETE" }),
+  documentAttachment: (id) => req(`/documents/${id}/attachment`),
 };
 
 async function downloadXlsx(path, filters, prefix) {
