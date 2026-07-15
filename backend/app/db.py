@@ -155,12 +155,29 @@ def init_db() -> None:
                 WHERE category IN ('iqama', 'contract', 'rent');
 
             -- Small key/value store for operator-editable settings that don't
-            -- belong in env vars (e.g. the document-expiry reminder recipients,
-            -- so they can be changed from the UI without a redeploy).
+            -- belong in env vars (e.g. the document-expiry reminder recipients
+            -- and per-category alert thresholds), so they can be changed from
+            -- the UI without a redeploy.
             CREATE TABLE IF NOT EXISTS app_settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
             );
+
+            -- Renewal history: one row per date change to a document (see the
+            -- PATCH handler in routers/documents.py), so the audit trail of past
+            -- iqama/contract/rent/etc. validity periods is preserved.
+            CREATE TABLE IF NOT EXISTS document_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                old_start   TEXT    NOT NULL DEFAULT '',
+                old_end     TEXT    NOT NULL DEFAULT '',
+                new_start   TEXT    NOT NULL DEFAULT '',
+                new_end     TEXT    NOT NULL DEFAULT '',
+                changed_by  TEXT    NOT NULL DEFAULT '',
+                changed_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_document_history_doc
+                ON document_history (document_id, id);
 
             -- The attendance feature (clock in/out, geofencing, WebAuthn
             -- fingerprints) was removed; drop its tables from existing DBs.

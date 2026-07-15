@@ -93,6 +93,11 @@ export const api = {
   updateDocument: (id, data) => req(`/documents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteDocument: (id) => req(`/documents/${id}`, { method: "DELETE" }),
   documentAttachment: (id) => req(`/documents/${id}/attachment`),
+  documentHistory: (id) => req(`/documents/${id}/history`),
+  exportDocuments: (filters = {}) => downloadXlsx("/documents/export", filters, "documents"),
+
+  getThresholds: () => req("/settings/thresholds"),
+  setThresholds: (thresholds) => req("/settings/thresholds", { method: "POST", body: JSON.stringify({ thresholds }) }),
 };
 
 async function downloadXlsx(path, filters, prefix) {

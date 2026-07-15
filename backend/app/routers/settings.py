@@ -6,6 +6,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from ..auth import ROLE_HR_MANAGER, CurrentUser, require_role
 from ..db import db
+from ..doc_config import DEFAULT_THRESHOLDS, get_thresholds, save_thresholds
 from ..emailer import email_configured, email_from, email_transport, send_email
 from ..reminders import read_config, send_reminders, write_config
 
@@ -23,6 +24,11 @@ class ReminderConfigIn(BaseModel):
     # parsed and de-duplicated server-side in reminders.parse_recipients.
     recipients: str = Field("", max_length=2000)
     enabled: bool = True
+
+
+class ThresholdsIn(BaseModel):
+    # {category: {"yellow": int, "red": int}}; validated in doc_config.save_thresholds.
+    thresholds: dict = Field(default_factory=dict)
 
 
 @router.get("")
@@ -82,3 +88,14 @@ def run_reminders(_: CurrentUser = Depends(_manager)):
     """Send the digest now regardless of the enable toggle (still needs
     recipients + a configured email transport)."""
     return send_reminders(require_enabled=False)
+
+
+@router.get("/thresholds")
+def get_document_thresholds(_: CurrentUser = Depends(_manager)):
+    """Per-category yellow/red day thresholds, plus the built-in defaults."""
+    return {"thresholds": get_thresholds(), "defaults": DEFAULT_THRESHOLDS}
+
+
+@router.post("/thresholds")
+def set_document_thresholds(payload: ThresholdsIn, _: CurrentUser = Depends(_manager)):
+    return {"thresholds": save_thresholds(payload.thresholds)}
