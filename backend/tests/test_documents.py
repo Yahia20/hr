@@ -120,6 +120,29 @@ def test_employee_role_forbidden(admin, new_employee):
     assert _mk(emp_user).status_code == 403
 
 
+def test_expiring_summary(admin):
+    # Seed one of each urgency in distinct slots/lists.
+    _mk(admin, category="iqama", owner="Exp A", title="Iqama", end_date=_in(3))      # red
+    _mk(admin, category="contract", owner="Exp B", title="Contract", end_date=_in(10))  # yellow
+    _mk(admin, category="license", title="Old License", start_date=_in(-40), end_date=_in(-2))  # expired
+    _mk(admin, category="license", title="Fresh License", end_date=_in(300))         # green (excluded)
+
+    body = admin.get("/api/documents/expiring").json()
+    ids_titles = {(i["status"]) for i in body["items"]}
+    assert "green" not in ids_titles  # green never appears
+    assert body["counts"]["total"] == len(body["items"])
+    assert body["counts"]["red"] >= 1 and body["counts"]["yellow"] >= 1 and body["counts"]["expired"] >= 1
+    assert body["by_scope"]["employee"] >= 2  # the iqama + contract above
+    # Most urgent (smallest days_left) first.
+    days = [i["days_left"] for i in body["items"]]
+    assert days == sorted(days)
+
+
+def test_expiring_requires_hr(admin, new_employee):
+    emp_user, _ = new_employee(role="employee")
+    assert emp_user.get("/api/documents/expiring").status_code == 403
+
+
 def test_auth_required_documents():
     from fastapi.testclient import TestClient
     from app.main import app

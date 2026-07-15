@@ -84,6 +84,7 @@ export const api = {
     ).toString();
     return req(`/documents${qs ? `?${qs}` : ""}`);
   },
+  documentsExpiring: () => req("/documents/expiring"),
   createDocument: (data) => req("/documents", { method: "POST", body: JSON.stringify(data) }),
   updateDocument: (id, data) => req(`/documents/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteDocument: (id) => req(`/documents/${id}`, { method: "DELETE" }),

@@ -6,7 +6,7 @@ import logo from "./assets/logo.png";
 
 const ROLE_LABEL_KEY = { hr_manager: "roleManager", hr_officer: "roleOfficer", dept_head: "roleDeptHead", employee: "roleEmployee" };
 
-export const Sidebar = memo(function Sidebar({ ar, t, mobile, collapsed, setCollapsed, navs, page, onNav }) {
+export const Sidebar = memo(function Sidebar({ ar, t, mobile, collapsed, setCollapsed, navs, page, onNav, badges = {} }) {
   const mini = collapsed && !mobile;
   return (
     <aside aria-label={t("mainMenu")} style={{ position: "fixed", top: 0, bottom: 0, [ar ? "right" : "left"]: 0, width: mobile ? 256 : collapsed ? 68 : 256, background: S.w, [ar ? "borderLeft" : "borderRight"]: `1px solid ${S.g100}`, display: "flex", flexDirection: "column", transition: "width 0.22s cubic-bezier(.4,0,.2,1)", zIndex: 300, boxShadow: mobile ? S.sh2 : "2px 0 12px rgba(0,0,0,0.04)", overflow: "hidden" }}>
@@ -23,11 +23,18 @@ export const Sidebar = memo(function Sidebar({ ar, t, mobile, collapsed, setColl
       <nav style={{ flex: 1, padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2, overflowY: "auto" }}>
         {navs.map((n) => {
           const act = page === n.id;
+          const count = badges[n.id] || 0;
           return (
             <button key={n.id} onClick={() => onNav(n.id)} aria-current={act ? "page" : undefined} title={mini ? t(n.id) : undefined} style={{ display: "flex", alignItems: "center", gap: 10, padding: mini ? 11 : "10px 12px", justifyContent: mini ? "center" : "flex-start", borderRadius: S.r2, border: "none", cursor: "pointer", background: act ? S.priL : "transparent", color: act ? S.priD : S.g400, fontWeight: act ? 600 : 500, fontSize: 13, transition: S.tr, width: "100%", textAlign: ar ? "right" : "left", fontFamily: "inherit", position: "relative" }}>
               {act && <span style={{ position: "absolute", [ar ? "right" : "left"]: 0, top: "50%", transform: "translateY(-50%)", width: 3, height: 20, borderRadius: ar ? "2px 0 0 2px" : "0 2px 2px 0", background: S.pri }} />}
               <span style={{ color: act ? S.pri : "inherit", display: "flex" }}>{n.icon}</span>
               {!mini && <span style={{ whiteSpace: "nowrap" }}>{t(n.id)}</span>}
+              {count > 0 && !mini && (
+                <span style={{ marginInlineStart: "auto", minWidth: 18, textAlign: "center", padding: "0 6px", height: 18, lineHeight: "18px", borderRadius: S.rF, background: S.err, color: "#fff", fontSize: 11, fontWeight: 800 }}>{count}</span>
+              )}
+              {count > 0 && mini && (
+                <span aria-hidden style={{ position: "absolute", top: 7, [ar ? "left" : "right"]: 7, width: 8, height: 8, borderRadius: "50%", background: S.err, border: `1.5px solid ${S.w}` }} />
+              )}
             </button>
           );
         })}
@@ -52,6 +59,7 @@ Sidebar.propTypes = {
   navs: PropTypes.arrayOf(PropTypes.shape({ id: PropTypes.string, icon: PropTypes.node })).isRequired,
   page: PropTypes.string.isRequired,
   onNav: PropTypes.func.isRequired,
+  badges: PropTypes.object,
 };
 
 export const Topbar = memo(function Topbar({ ar, t, mobile, page, user, dark, onToggleDark, onToggleLang, onLogout, onOpenDrawer }) {

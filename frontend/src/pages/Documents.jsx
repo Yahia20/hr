@@ -26,7 +26,18 @@ const STATUS_STYLE = {
 };
 const STATUS_KEY = { green: "stGreen", yellow: "stYellow", red: "stRed", expired: "stExpired", unknown: "stUnknown" };
 
-function daysText(t, doc) {
+// Category → i18n key for a short chip label (iqama/contract reuse their own keys).
+export const CATEGORY_LABEL_KEY = { iqama: "iqama", contract: "contract", rent: "catRent", vehicle: "catVehicle", license: "catLicense" };
+const RENT_LABEL_KEY = { rawda: "rentRawda", hamra: "rentHamra", housing: "rentHousing" };
+
+// A friendly headline for a document row, whatever its category.
+export function docPrimaryLabel(t, doc) {
+  if (doc.category === "iqama" || doc.category === "contract") return doc.owner || doc.title;
+  if (doc.category === "rent") return t(RENT_LABEL_KEY[doc.owner] || "tabRents");
+  return doc.title || doc.owner;
+}
+
+export function daysText(t, doc) {
   const n = doc.days_left;
   if (n === null || n === undefined) return "";
   if (doc.status === "expired") return t("expiredAgoN").replace("{n}", Math.abs(n));
@@ -34,7 +45,7 @@ function daysText(t, doc) {
   return t("expiresInN").replace("{n}", n);
 }
 
-function ExpiryBadge({ t, doc }) {
+export function ExpiryBadge({ t, doc }) {
   const st = STATUS_STYLE[doc.status] || STATUS_STYLE.unknown;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", borderRadius: S.rF, background: st.bg, color: st.fg, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>
@@ -182,7 +193,7 @@ function useDocs() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Employee Documents: one iqama + one contract per employee.
 // ─────────────────────────────────────────────────────────────────────────────
-export function EmployeeDocs({ lang, user }) {
+export function EmployeeDocs({ lang, user, onChanged }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
   const isManager = user?.role === "hr_manager";
@@ -205,6 +216,7 @@ export function EmployeeDocs({ lang, user }) {
       setEmployees(emps);
       setIqamas(iq);
       setContracts(ct);
+      onChanged?.();
     } catch {
       toast("err", t("errGeneric"));
       setEmployees([]);
@@ -297,13 +309,9 @@ export function EmployeeDocs({ lang, user }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Company Documents: rents (3 fixed slots) / vehicles / licenses.
 // ─────────────────────────────────────────────────────────────────────────────
-const RENT_SLOTS = [
-  { owner: "rawda", key: "rentRawda" },
-  { owner: "hamra", key: "rentHamra" },
-  { owner: "housing", key: "rentHousing" },
-];
+const RENT_SLOTS = Object.entries(RENT_LABEL_KEY).map(([owner, key]) => ({ owner, key }));
 
-export function CompanyDocs({ lang, user }) {
+export function CompanyDocs({ lang, user, onChanged }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
   const isManager = user?.role === "hr_manager";
@@ -319,6 +327,7 @@ export function CompanyDocs({ lang, user }) {
     setDocs(null);
     try {
       setDocs(await api.listDocuments({ category: tab }));
+      onChanged?.();
     } catch {
       toast("err", t("errGeneric"));
       setDocs([]);

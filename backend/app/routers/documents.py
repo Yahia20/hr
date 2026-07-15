@@ -103,6 +103,36 @@ def list_documents(
     return [_public(dict(r)) for r in rows]
 
 
+# Categories shown on the "Employee Documents" page; the rest are company docs.
+_EMPLOYEE_CATEGORIES = {"iqama", "contract"}
+# Statuses that need a human to act (green = fine, unknown = unparseable).
+_ATTENTION = {"yellow", "red", "expired"}
+
+
+@router.get("/expiring")
+def expiring_documents(_: CurrentUser = Depends(_hr_staff)):
+    """Everything that needs attention (yellow / red / expired), most urgent
+    first, plus counts. Powers the dashboard widget and the sidebar badges."""
+    with db() as conn:
+        rows = conn.execute("SELECT * FROM documents").fetchall()
+
+    items = []
+    for r in rows:
+        pub = _public(dict(r))
+        if pub["status"] in _ATTENTION:
+            items.append(pub)
+    # Most urgent first: fewest days left (expired = negative) leads.
+    items.sort(key=lambda d: (d["days_left"] if d["days_left"] is not None else 1 << 30))
+
+    counts = {"yellow": 0, "red": 0, "expired": 0}
+    scope = {"employee": 0, "company": 0}
+    for d in items:
+        counts[d["status"]] += 1
+        scope["employee" if d["category"] in _EMPLOYEE_CATEGORIES else "company"] += 1
+    counts["total"] = len(items)
+    return {"counts": counts, "by_scope": scope, "items": items}
+
+
 @router.post("", status_code=201)
 def create_document(payload: DocumentIn, user: CurrentUser = Depends(_hr_staff)):
     with db() as conn:

@@ -116,6 +116,10 @@ export const L = {
     docLegend: "2 weeks before expiry turns yellow, 1 week turns red",
     errSlotExists: "A record already exists — use Renew instead",
     docSaved: "Document saved",
+    catRent: "Rent", catVehicle: "Vehicle", catLicense: "License",
+    docAlertsTitle: "Documents needing attention",
+    docAlertsEmpty: "All documents are valid",
+    more: "more",
   },
   ar: {
     dash: "\u0644\u0648\u062D\u0629 \u0627\u0644\u062A\u062D\u0643\u0645", log: "\u062A\u0633\u062C\u064A\u0644 \u0645\u062E\u0627\u0644\u0641\u0629",
@@ -263,5 +267,9 @@ export const L = {
     docLegend: "\u0642\u0628\u0644 \u0627\u0644\u0627\u0646\u062A\u0647\u0627\u0621 \u0628\u0623\u0633\u0628\u0648\u0639\u064A\u0646 \u064A\u0635\u064A\u0631 \u0623\u0635\u0641\u0631\u060C \u0648\u0628\u0623\u0633\u0628\u0648\u0639 \u064A\u0635\u064A\u0631 \u0623\u062D\u0645\u0631",
     errSlotExists: "\u064A\u0648\u062C\u062F \u0633\u062C\u0644 \u0628\u0627\u0644\u0641\u0639\u0644 \u2014 \u0627\u0633\u062A\u062E\u062F\u0645 \u0627\u0644\u062A\u062C\u062F\u064A\u062F",
     docSaved: "\u062A\u0645 \u062D\u0641\u0638 \u0627\u0644\u0645\u0633\u062A\u0646\u062F",
+    catRent: "\u0625\u064A\u062C\u0627\u0631", catVehicle: "\u0645\u0631\u0643\u0628\u0629", catLicense: "\u0631\u062E\u0635\u0629",
+    docAlertsTitle: "\u0645\u0633\u062A\u0646\u062F\u0627\u062A \u0645\u062D\u062A\u0627\u062C\u0629 \u0627\u0646\u062A\u0628\u0627\u0647",
+    docAlertsEmpty: "\u0643\u0644 \u0627\u0644\u0645\u0633\u062A\u0646\u062F\u0627\u062A \u0633\u0627\u0631\u064A\u0629",
+    more: "\u0623\u062E\u0631\u0649",
   },
 };
