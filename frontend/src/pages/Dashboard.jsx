@@ -6,8 +6,9 @@ import { IC } from "../icons";
 import { Card, Empty, KpiCard, KpiSkeleton, SkeletonRows, BtnPri, BtnSec, BtnGhost, PenBadge, Th } from "../components";
 import { useToast } from "../toast";
 import { BarList, PenaltyDist } from "../charts";
+import { ExpiryBadge, daysText, docPrimaryLabel, CATEGORY_LABEL_KEY } from "./Documents";
 
-export default function Dashboard({ lang, user, onNewV, onViewAll }) {
+export default function Dashboard({ lang, user, onNewV, onViewAll, docAlerts, onGoDocs }) {
   const ar = lang === "ar";
   const t = (k) => L[lang][k] || k;
   const [data, setData] = useState(null);
@@ -53,6 +54,8 @@ export default function Dashboard({ lang, user, onNewV, onViewAll }) {
           </>
         )}
       </div>
+
+      <DocAlerts t={t} ar={ar} docAlerts={docAlerts} onGoDocs={onGoDocs} />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 20 }}>
         <Card>
@@ -116,5 +119,49 @@ export default function Dashboard({ lang, user, onNewV, onViewAll }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+// Documents needing attention (yellow / red / expired), most urgent first.
+function DocAlerts({ t, ar, docAlerts, onGoDocs }) {
+  const loading = docAlerts == null;
+  const items = docAlerts?.items || [];
+  const total = docAlerts?.counts?.total || 0;
+  const shown = items.slice(0, 6);
+
+  return (
+    <Card flush>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: `1px solid ${S.g100}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, color: S.g800, margin: 0 }}>{t("docAlertsTitle")}</h3>
+          {total > 0 && (
+            <span style={{ minWidth: 20, textAlign: "center", padding: "1px 7px", borderRadius: S.rF, background: S.err, color: "#fff", fontSize: 11.5, fontWeight: 800 }}>{total}</span>
+          )}
+        </div>
+        {onGoDocs && <BtnGhost onClick={onGoDocs}>{t("viewAll")} {"→"}</BtnGhost>}
+      </div>
+      {loading ? (
+        <div style={{ padding: 20 }}><SkeletonRows rows={3} cols={1} /></div>
+      ) : shown.length === 0 ? (
+        <Empty text={t("docAlertsEmpty")} />
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {shown.map((d) => (
+            <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "12px 20px", borderBottom: `1px solid ${S.g100}` }}>
+              <ExpiryBadge t={t} doc={d} />
+              <span style={{ fontWeight: 600, color: S.g700, flex: 1, minWidth: 120 }}>{docPrimaryLabel(t, d)}</span>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: S.g500, padding: "2px 8px", borderRadius: S.rF, background: S.g100, whiteSpace: "nowrap" }}>{t(CATEGORY_LABEL_KEY[d.category] || d.category)}</span>
+              <span style={{ direction: "ltr", fontSize: 12.5, fontWeight: 600, color: S.g700 }}>{d.end_date}</span>
+              <span style={{ fontSize: 12, color: S.g400, whiteSpace: "nowrap" }}>{daysText(t, d)}</span>
+            </div>
+          ))}
+          {total > shown.length && (
+            <button onClick={onGoDocs} style={{ padding: "10px 20px", background: "none", border: "none", color: S.pri, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit", textAlign: ar ? "right" : "left" }}>
+              +{total - shown.length} {t("more")}
+            </button>
+          )}
+        </div>
+      )}
+    </Card>
   );
 }

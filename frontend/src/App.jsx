@@ -11,6 +11,7 @@ import ErrorBoundary from "./ErrorBoundary";
 import { useHotkeys, useLocalStorage, useMediaQuery } from "./hooks";
 import Dashboard from "./pages/Dashboard";
 import Permissions from "./pages/Permissions";
+import { EmployeeDocs, CompanyDocs } from "./pages/Documents";
 import LogViolation from "./pages/LogViolation";
 import Employees from "./pages/Employees";
 import Reports from "./pages/Reports";
@@ -20,13 +21,13 @@ import Login from "./pages/Login";
 
 // Pages each role may open; the first entry is the role's landing page.
 const ROLE_PAGES = {
-  hr_manager: ["dash", "perm", "log", "emp", "rep", "users", "set"],
-  hr_officer: ["dash", "perm", "log", "emp", "rep"],
+  hr_manager: ["dash", "perm", "log", "emp", "edocs", "cdocs", "rep", "users", "set"],
+  hr_officer: ["dash", "perm", "log", "emp", "edocs", "cdocs", "rep"],
   dept_head: ["rep", "emp"],
   employee: ["rep"],
 };
 
-const NAV_ICONS = { dash: IC.dash, perm: IC.perm, log: IC.log, emp: IC.emp, rep: IC.rep, users: IC.emp, set: IC.set };
+const NAV_ICONS = { dash: IC.dash, perm: IC.perm, log: IC.log, emp: IC.emp, edocs: IC.idcard, cdocs: IC.building, rep: IC.rep, users: IC.emp, set: IC.set };
 
 // Single-key shortcuts (suppressed while typing in a field).
 const HOTKEY_PAGES = { d: "dash", n: "log", e: "emp", r: "rep" };
@@ -43,6 +44,7 @@ export default function HRSystem() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [user, setUser] = useState(null);
+  const [docAlerts, setDocAlerts] = useState(null);
   const [booting, setBooting] = useState(true);
   const [resetToken, setResetToken] = useState(readResetToken);
   const mobile = useMediaQuery("(max-width: 820px)");
@@ -70,6 +72,20 @@ export default function HRSystem() {
   const ar = lang === "ar";
   const t = useCallback((k) => L[lang][k] || k, [lang]);
   const allowed = useMemo(() => (user ? ROLE_PAGES[user.role] || ["rep"] : []), [user]);
+
+  // Expiry alerts drive the dashboard widget and the sidebar badges; only HR
+  // staff can read them. Refreshed on login and after any document change.
+  const refreshAlerts = useCallback(() => {
+    api.documentsExpiring().then(setDocAlerts).catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (user && (user.role === "hr_manager" || user.role === "hr_officer")) refreshAlerts();
+    else setDocAlerts(null);
+  }, [user, refreshAlerts]);
+  const navBadges = useMemo(() => ({
+    edocs: docAlerts?.by_scope?.employee || 0,
+    cdocs: docAlerts?.by_scope?.company || 0,
+  }), [docAlerts]);
 
   const hotkeys = useMemo(() => {
     const map = {
@@ -111,8 +127,10 @@ export default function HRSystem() {
   const navs = allowed.map((id) => ({ id, icon: NAV_ICONS[id] }));
 
   const PAGES = {
-    dash: <Dashboard lang={lang} user={user} onNewV={() => nav("log")} onViewAll={() => nav("rep")} />,
+    dash: <Dashboard lang={lang} user={user} onNewV={() => nav("log")} onViewAll={() => nav("rep")} docAlerts={docAlerts} onGoDocs={allowed.includes("edocs") ? () => nav("edocs") : undefined} />,
     perm: <Permissions lang={lang} user={user} />,
+    edocs: <EmployeeDocs lang={lang} user={user} onChanged={refreshAlerts} />,
+    cdocs: <CompanyDocs lang={lang} user={user} onChanged={refreshAlerts} />,
     log: <LogViolation lang={lang} user={user} />,
     emp: <Employees lang={lang} user={user} onGoPerm={allowed.includes("perm") ? () => nav("perm") : undefined} />,
     rep: <Reports lang={lang} user={user} />,
@@ -140,7 +158,7 @@ export default function HRSystem() {
           <div onClick={() => setDrawerOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(8,14,22,.45)", zIndex: 250, animation: "hr-fade-in .15s ease" }} />
         )}
         {(!mobile || drawerOpen) && (
-          <Sidebar ar={ar} t={t} mobile={mobile} collapsed={collapsed} setCollapsed={setCollapsed} navs={navs} page={page} onNav={nav} />
+          <Sidebar ar={ar} t={t} mobile={mobile} collapsed={collapsed} setCollapsed={setCollapsed} navs={navs} page={page} onNav={nav} badges={navBadges} />
         )}
         <div style={{ [ar ? "marginRight" : "marginLeft"]: mobile ? 0 : collapsed ? 68 : 256, transition: "margin .22s cubic-bezier(.4,0,.2,1)", minHeight: "100vh", display: "flex", flexDirection: "column" }}>
           <Topbar ar={ar} t={t} mobile={mobile} page={page} user={user} dark={dark} onToggleDark={toggleDark} onToggleLang={toggleLang} onLogout={logout} onOpenDrawer={openDrawer} />

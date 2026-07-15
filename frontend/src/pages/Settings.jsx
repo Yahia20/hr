@@ -4,7 +4,7 @@ import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, BtnPri, inp } from "../components";
+import { Card, BtnPri, BtnSec, inp } from "../components";
 import { useToast } from "../toast";
 
 const ROLE_LABEL_KEY = { hr_manager: "roleManager", hr_officer: "roleOfficer", dept_head: "roleDeptHead", employee: "roleEmployee" };
@@ -72,10 +72,45 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
   const [testing, setTesting] = useState(false);
   const [testTo, setTestTo] = useState(user?.email || "");
 
+  const [rem, setRem] = useState(null);
+  const [remTo, setRemTo] = useState("");
+  const [remSaving, setRemSaving] = useState(false);
+  const [remSending, setRemSending] = useState(false);
+
   useEffect(() => {
     if (!isManager) return;
     api.getSettings().then(setSettings).catch(() => setSettings(null));
+    api.getReminders().then((r) => { setRem(r); setRemTo(r.recipients || ""); }).catch(() => setRem(null));
   }, [isManager]);
+
+  async function saveRem(enabled) {
+    setRemSaving(true);
+    try {
+      const next = await api.setReminders({ recipients: remTo, enabled: enabled ?? rem?.enabled ?? true });
+      setRem(next);
+      setRemTo(next.recipients || "");
+      toast("ok", t("savedOk"));
+    } catch (e) {
+      toast("err", e.message || t("errGeneric"));
+    } finally {
+      setRemSaving(false);
+    }
+  }
+
+  const REM_MSG = { ok: "docRemSent", nothing_due: "docRemNothingDue", no_recipients: "docRemNoRecipients", email_not_configured: "smtpMissing" };
+  async function sendRemNow() {
+    setRemSending(true);
+    try {
+      const res = await api.runReminders();
+      if (res.sent) toast("ok", `${t("docRemSent")} (${res.count})`);
+      else toast(res.reason === "nothing_due" ? "ok" : "err", t(REM_MSG[res.reason] || "errGeneric"));
+      api.getReminders().then((r) => { setRem(r); }).catch(() => {});
+    } catch (e) {
+      toast("err", e.message || t("errGeneric"));
+    } finally {
+      setRemSending(false);
+    }
+  }
 
   async function sendTest() {
     setTesting(true);
@@ -151,6 +186,33 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
               <p style={{ fontSize: 12, color: S.g400 }}>{t("smtpEnvHint")}</p>
             )}
           </div>
+        </Section>
+      )}
+
+      {/* Document expiry reminders — managers only */}
+      {isManager && (
+        <Section icon={IC.bell} title={t("docRemTitle")} sub={t("docRemSub")}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: S.g500 }}>{t("docRemRecipients")}</label>
+            <textarea
+              style={{ ...inp, resize: "vertical", minHeight: 52, direction: "ltr" }}
+              value={remTo}
+              onChange={(e) => setRemTo(e.target.value)}
+              placeholder="name@example.com, name2@example.com"
+            />
+            <div>
+              <BtnPri onClick={() => saveRem()} disabled={remSaving}>{IC.check} <span>{remSaving ? "…" : t("save")}</span></BtnPri>
+            </div>
+          </div>
+          <Row title={t("docRemEnabled")} sub={t("docRemEnabledSub")}>
+            <Switch on={!!rem?.enabled} onChange={() => saveRem(!rem?.enabled)} label={t("docRemEnabled")} />
+          </Row>
+          <Row title={t("docRemSendNow")} sub={rem?.last_sent ? `${t("docRemLastSent")}: ${rem.last_sent}` : t("docRemNever")}>
+            <BtnSec onClick={sendRemNow} disabled={remSending || !remTo.trim()}>{IC.mail} <span>{remSending ? "…" : t("docRemSendNow")}</span></BtnSec>
+          </Row>
+          {rem != null && !rem.email_configured && (
+            <p style={{ fontSize: 12, color: S.g400, marginTop: 6 }}>{t("smtpEnvHint")}</p>
+          )}
         </Section>
       )}
     </div>
