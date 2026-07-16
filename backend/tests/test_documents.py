@@ -121,6 +121,9 @@ def test_employee_role_forbidden(admin, new_employee):
 
 
 def test_expiring_summary(admin):
+    # Employee docs only count toward alerts while their owner is on the roster.
+    for name in ("Exp A", "Exp B"):
+        admin.post("/api/employees", json={"name": name, "email": f"{name.replace(' ', '')}@e.com", "department": "Ops", "manager_email": ""}, headers=csrf(admin))
     # Seed one of each urgency in distinct slots/lists.
     _mk(admin, category="iqama", owner="Exp A", title="Iqama", end_date=_in(3))      # red
     _mk(admin, category="contract", owner="Exp B", title="Contract", end_date=_in(10))  # yellow
@@ -128,8 +131,8 @@ def test_expiring_summary(admin):
     _mk(admin, category="license", title="Fresh License", end_date=_in(300))         # green (excluded)
 
     body = admin.get("/api/documents/expiring").json()
-    ids_titles = {(i["status"]) for i in body["items"]}
-    assert "green" not in ids_titles  # green never appears
+    statuses = {i["status"] for i in body["items"]}
+    assert "green" not in statuses  # green never appears
     assert body["counts"]["total"] == len(body["items"])
     assert body["counts"]["red"] >= 1 and body["counts"]["yellow"] >= 1 and body["counts"]["expired"] >= 1
     assert body["by_scope"]["employee"] >= 2  # the iqama + contract above
@@ -166,20 +169,38 @@ def test_renewal_history(admin):
 
 
 def test_per_category_thresholds(admin):
-    # Widen iqama's window: warn red within 30 days, yellow within 60.
-    r = admin.post("/api/settings/thresholds", json={"thresholds": {"iqama": {"yellow": 60, "red": 30}}}, headers=csrf(admin))
-    assert r.status_code == 200
-    assert admin.get("/api/settings/thresholds").json()["thresholds"]["iqama"] == {"yellow": 60, "red": 30}
+    try:
+        # Widen iqama's window: warn red within 30 days, yellow within 60.
+        r = admin.post("/api/settings/thresholds", json={"thresholds": {"iqama": {"yellow": 60, "red": 30}}}, headers=csrf(admin))
+        assert r.status_code == 200
+        assert admin.get("/api/settings/thresholds").json()["thresholds"]["iqama"] == {"yellow": 60, "red": 30}
 
-    # An iqama 20 days out is now RED (would be green under the 14/7 default)...
-    iq = _mk(admin, category="iqama", owner="Threshold Worker", title="Iqama", end_date=_in(20)).json()
-    assert iq["status"] == "red"
-    # ...while a license 20 days out still uses the default and is green.
-    lic = _mk(admin, category="license", title="Still Default", end_date=_in(20)).json()
-    assert lic["status"] == "green"
+        # An iqama 20 days out is now RED (would be green under the 14/7 default)...
+        iq = _mk(admin, category="iqama", owner="Threshold Worker", title="Iqama", end_date=_in(20)).json()
+        assert iq["status"] == "red"
+        # ...while a license 20 days out still uses the default and is green.
+        lic = _mk(admin, category="license", title="Still Default", end_date=_in(20)).json()
+        assert lic["status"] == "green"
+    finally:
+        # Restore defaults even if an assertion above fails, so 60/30 doesn't
+        # leak into the shared session DB and skew later tests.
+        admin.post("/api/settings/thresholds", json={"thresholds": {"iqama": {"yellow": 14, "red": 7}}}, headers=csrf(admin))
 
-    # Restore defaults so other tests see the original bands.
-    admin.post("/api/settings/thresholds", json={"thresholds": {"iqama": {"yellow": 14, "red": 7}}}, headers=csrf(admin))
+
+def test_deleted_employee_docs_excluded_from_alerts(admin):
+    # An employee document counts toward alerts only while the employee exists.
+    admin.post("/api/employees", json={"name": "Ghost Emp", "email": "ghost@e.com", "department": "Ops", "manager_email": ""}, headers=csrf(admin))
+    admin.post("/api/documents", json={"category": "iqama", "owner": "Ghost Emp", "title": "Iqama", "start_date": _in(-300), "end_date": _in(3)}, headers=csrf(admin))
+
+    def ghost_in_expiring():
+        return any(i["owner"] == "Ghost Emp" for i in admin.get("/api/documents/expiring").json()["items"])
+
+    assert ghost_in_expiring()  # red iqama shows up while employed
+    assert admin.delete("/api/employees/Ghost%20Emp", headers=csrf(admin)).status_code == 204
+    assert not ghost_in_expiring()  # no longer counted after deletion
+    # ...but the document itself is preserved, not destroyed.
+    kept = admin.get("/api/documents?category=iqama&owner=Ghost%20Emp").json()
+    assert len(kept) == 1 and kept[0]["title"] == "Iqama"
 
 
 def test_auth_required_documents():

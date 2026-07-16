@@ -14,6 +14,15 @@ logger = logging.getLogger("hr.doc_config")
 CATEGORIES = ("iqama", "contract", "rent", "vehicle", "license")
 K_THRESHOLDS = "doc_thresholds"
 
+# SQL predicate for alert eligibility (dashboard badges + reminder digest): a
+# document counts unless it's an employee document (iqama/contract) whose owner
+# is no longer on the roster. Those orphans aren't shown on any page after the
+# employee is deleted, so they must not keep inflating the counters or emails.
+# The documents themselves are kept — this only affects the alert surfaces.
+ALERT_ELIGIBLE_SQL = (
+    "(category NOT IN ('iqama', 'contract') OR owner IN (SELECT name FROM employees))"
+)
+
 DEFAULT_THRESHOLDS = {c: {"yellow": YELLOW_DAYS, "red": RED_DAYS} for c in CATEGORIES}
 
 
