@@ -2,13 +2,12 @@ import hashlib
 import logging
 import os
 import secrets
-import sqlite3
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from .. import auth as A
-from ..db import db, lock
+from ..db import IntegrityError, db, lock
 from ..emailer import send_email, smtp_configured
 from ..schemas import (
     ForgotPasswordIn,
@@ -192,7 +191,7 @@ def create_user(payload: UserIn, _: A.CurrentUser = Depends(A.require_role(A.ROL
                  payload.department.strip(), A.hash_password(payload.password), now),
             )
             return dict(cur.fetchone())
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             raise HTTPException(status.HTTP_409_CONFLICT, "A user with this email already exists")
 
 

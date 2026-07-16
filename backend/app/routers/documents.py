@@ -1,6 +1,5 @@
 import io
 import logging
-import sqlite3
 from datetime import datetime
 from typing import Optional
 
@@ -14,7 +13,7 @@ from ..auth import (
     CurrentUser,
     require_role,
 )
-from ..db import db
+from ..db import IntegrityError, db
 from ..doc_config import ALERT_ELIGIBLE_SQL, load_thresholds, thresholds_for
 from ..expiry import ATTENTION_STATUSES, compute_status
 from ..schemas import DOCUMENT_CATEGORIES, DocumentIn, DocumentUpdateIn
@@ -198,7 +197,7 @@ def create_document(payload: DocumentIn, user: CurrentUser = Depends(_hr_staff))
                 ),
             )
             return _public(dict(cur.fetchone()), tmap)
-        except sqlite3.IntegrityError:
+        except IntegrityError:
             # Hit the (owner, category) slot uniqueness for iqama/contract/rent —
             # a record already exists; the caller should renew it (PATCH) instead.
             raise HTTPException(409, "slot_exists")
