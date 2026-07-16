@@ -116,7 +116,7 @@ docker-compose up --build
 ```
 
 ## Conventions
-- Backend uses raw `sqlite3` (no ORM); open connections via the `db()` context manager in `db.py`, which commits/rolls back automatically
+- Backend uses raw `sqlite3` (no ORM); open connections via the `db()` context manager in `db.py`, which commits/rolls back automatically. Read-modify-write invariants (violation escalation, permission monthly quota, last-active-manager) call `lock(conn)` as the first statement in the block — it takes the write lock up front (SQLite `BEGIN IMMEDIATE`) so concurrent requests can't slip a stale check-then-write through the gap
 - Penalty calculation logic and the rules matrix live in `penalties.py`
 - Frontend is a React + Vite app (has a build step)
 - All API responses are JSON

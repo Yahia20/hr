@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from .. import auth as A
-from ..db import db
+from ..db import db, lock
 from ..emailer import send_email, smtp_configured
 from ..schemas import (
     ForgotPasswordIn,
@@ -151,7 +151,14 @@ def reset_password(payload: ResetPasswordIn):
         ).fetchone()
         if row is None or row["used"] or row["expires_at"] < now:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired reset link")
-        conn.execute("UPDATE password_resets SET used = 1 WHERE token_hash = ?", (token_hash,))
+        # Consume the token atomically: the `used = 0` guard + rowcount check
+        # means two concurrent requests with the same token can't both succeed.
+        consumed = conn.execute(
+            "UPDATE password_resets SET used = 1 WHERE token_hash = ? AND used = 0",
+            (token_hash,),
+        )
+        if consumed.rowcount == 0:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired reset link")
         conn.execute(
             "UPDATE users SET password_hash = ?, failed_attempts = 0, locked_until = NULL WHERE id = ?",
             (A.hash_password(payload.new_password), row["user_id"]),
@@ -200,6 +207,10 @@ def update_user(
     if payload.role is None and payload.department is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nothing to update")
     with db() as conn:
+        # Lock so the "last active HR manager" check and the role update are
+        # atomic — two concurrent demotions of different managers must not both
+        # pass the check and leave zero managers.
+        lock(conn)
         row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
@@ -240,5 +251,16 @@ def deactivate_user(user_id: int, current: A.CurrentUser = Depends(A.require_rol
     if user_id == current.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot deactivate your own account")
     with db() as conn:
+        # Same guard as demotion (and atomic under the lock): don't let the last
+        # active HR manager be deactivated, which would lock out user management.
+        lock(conn)
+        row = conn.execute("SELECT role, is_active FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is not None and row["role"] == A.ROLE_HR_MANAGER and row["is_active"]:
+            others = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE role = ? AND is_active = 1 AND id != ?",
+                (A.ROLE_HR_MANAGER, user_id),
+            ).fetchone()[0]
+            if others == 0:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Cannot deactivate the last active HR manager")
         conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
     A.destroy_user_sessions(user_id)

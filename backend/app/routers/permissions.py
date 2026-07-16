@@ -12,7 +12,7 @@ from ..auth import (
     CurrentUser,
     require_role,
 )
-from ..db import db
+from ..db import db, lock
 from ..schemas import PermissionIn
 
 logger = logging.getLogger("hr.permissions")
@@ -90,6 +90,9 @@ def list_permissions(
 def create_permission(payload: PermissionIn, user: CurrentUser = Depends(_hr_staff)):
     month_key = payload.permission_date[:7]
     with db() as conn:
+        # Lock before the quota count so two concurrent grants for the same
+        # employee/month can't both pass the check and exceed the quota.
+        lock(conn)
         emp = conn.execute(
             "SELECT 1 FROM employees WHERE name = ?", (payload.employee_name,)
         ).fetchone()

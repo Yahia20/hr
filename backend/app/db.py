@@ -28,6 +28,20 @@ def db():
         conn.close()
 
 
+def lock(conn) -> None:
+    """Serialize a read-modify-write (quota / escalation / last-manager checks).
+
+    Call this as the FIRST statement in a ``db()`` block, before the read: it
+    takes the write lock up front so a concurrent request can't slip a stale
+    check-then-write through the gap. Released on commit/rollback by ``db()``.
+
+    On SQLite this escalates the transaction to a write lock (BEGIN IMMEDIATE),
+    which is DB-wide but correct. (When the PostgreSQL backend lands, this will
+    take a per-key advisory lock instead.)
+    """
+    conn.execute("BEGIN IMMEDIATE")
+
+
 def init_db() -> None:
     raw = sqlite3.connect(DB_FILE)
     try:
