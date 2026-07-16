@@ -32,7 +32,7 @@ def _xlsx_safe(value):
         return "'" + value
     return value
 
-from ..db import db
+from ..db import db, lock
 from ..emailer import send_violation_emails
 from ..penalties import MATRIX_DATA, PENALTY_MAP
 from ..schemas import Violation, ViolationIn
@@ -52,21 +52,21 @@ def _scope_clause(user: CurrentUser) -> tuple[str, list]:
     return "", []
 
 
-def _next_penalty(emp_name: str, category: str, incident: str) -> str:
+def _next_penalty(conn, emp_name: str, category: str, incident: str) -> str:
+    """Next escalation step for this employee+incident. Runs on the CALLER's
+    connection so the count and the subsequent insert share one transaction."""
     meta = MATRIX_DATA[category][incident]
     escalation = meta["escalation"]
     reset_days = meta["reset"]
     cutoff = (datetime.now() - timedelta(days=reset_days)).strftime("%Y-%m-%d %H:%M:%S")
-
-    with db() as conn:
-        row = conn.execute(
-            """SELECT COUNT(*) FROM violations
-               WHERE employee_name = ?
-                 AND incident = ?
-                 AND created_at >= ?
-                 AND penalty_color != 'Investigation'""",
-            (emp_name, incident, cutoff),
-        ).fetchone()
+    row = conn.execute(
+        """SELECT COUNT(*) FROM violations
+           WHERE employee_name = ?
+             AND incident = ?
+             AND created_at >= ?
+             AND penalty_color != 'Investigation'""",
+        (emp_name, incident, cutoff),
+    ).fetchone()
     count = row[0] if row else 0
     idx = min(count, len(escalation) - 1)
     return escalation[idx]
@@ -137,34 +137,38 @@ def create_violation(
     if payload.category not in MATRIX_DATA or payload.incident not in MATRIX_DATA[payload.category]:
         raise HTTPException(400, "Unknown category or incident")
 
-    color = "Investigation" if payload.force_investigation else _next_penalty(
-        payload.employee_name, payload.category, payload.incident
-    )
-    p = PENALTY_MAP[color]
-
-    override = payload.override_days if (payload.override_days is not None and payload.override_days >= 0) else None
-    applied_days = override if override is not None else p["deduction_days"]
-    # A day-override replaces the standard deduction, so clear the matrix's
-    # hour-equivalent \u2014 otherwise the row would carry both an hours and a days
-    # deduction for the same penalty (double counting).
-    overridden = override is not None and applied_days != p["deduction_days"]
-    applied_hours = 0.0 if overridden else p["deduction_hours"]
-
-    if overridden:
-        # Keep the override visible in the label \u2014 including for Investigation,
-        # which may carry a deduction (both are allowed together).
-        base = p["label"] if color == "Investigation" else f"{color} Card"
-        label = f"{base} \u2014 {applied_days} Days Deduction (Override)"
-    else:
-        label = p["label"]
-
     # Audit trail: the recorder is always the signed-in user. The payload's
     # submitted_by is ignored (kept only for backward-compatible clients) so it
     # can't be spoofed to attribute a violation to someone else.
     submitted_by = user.name
-
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     with db() as conn:
+        # Take the write lock BEFORE reading the escalation count, so two
+        # concurrent violations for the same employee can't both read the same
+        # step count and land on the same penalty level.
+        lock(conn)
+        color = "Investigation" if payload.force_investigation else _next_penalty(
+            conn, payload.employee_name, payload.category, payload.incident
+        )
+        p = PENALTY_MAP[color]
+
+        override = payload.override_days if (payload.override_days is not None and payload.override_days >= 0) else None
+        applied_days = override if override is not None else p["deduction_days"]
+        # A day-override replaces the standard deduction, so clear the matrix's
+        # hour-equivalent \u2014 otherwise the row would carry both an hours and a days
+        # deduction for the same penalty (double counting).
+        overridden = override is not None and applied_days != p["deduction_days"]
+        applied_hours = 0.0 if overridden else p["deduction_hours"]
+
+        if overridden:
+            # Keep the override visible in the label \u2014 including for Investigation,
+            # which may carry a deduction (both are allowed together).
+            base = p["label"] if color == "Investigation" else f"{color} Card"
+            label = f"{base} \u2014 {applied_days} Days Deduction (Override)"
+        else:
+            label = p["label"]
+
         cur = conn.execute(
             """INSERT INTO violations
                (employee_name, category, incident, penalty_color, penalty_label,
@@ -220,7 +224,8 @@ def preview_next(
 ):
     if category not in MATRIX_DATA or incident not in MATRIX_DATA[category]:
         raise HTTPException(400, "Unknown category or incident")
-    color = _next_penalty(employee_name, category, incident)
+    with db() as conn:
+        color = _next_penalty(conn, employee_name, category, incident)
     meta = MATRIX_DATA[category][incident]
     return {"penalty_color": color, "penalty": PENALTY_MAP[color], "escalation": meta["escalation"], "reset": meta["reset"]}
 

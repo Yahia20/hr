@@ -53,6 +53,29 @@ def test_update_requires_auth():
     assert anon.patch("/api/auth/users/1", json={"role": "hr_officer"}).status_code == 401
 
 
+def test_reset_token_is_single_use(admin, new_employee):
+    # A reset token must work exactly once — a second use (or a concurrent
+    # duplicate) is rejected by the atomic `used = 0` guard.
+    import hashlib
+    from app.db import db
+
+    _, email = new_employee(role="employee")
+    token = "reset-token-" + "z" * 30  # >= 20 chars
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    with db() as conn:
+        uid = conn.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()[0]
+        conn.execute(
+            "INSERT INTO password_resets (token_hash, user_id, expires_at, used) VALUES (?, ?, ?, 0)",
+            (token_hash, uid, "2099-01-01 00:00:00"),
+        )
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    anon = TestClient(app)
+    assert anon.post("/api/auth/reset", json={"token": token, "new_password": "brandnewpass1"}).status_code == 200
+    assert anon.post("/api/auth/reset", json={"token": token, "new_password": "anotherpass12"}).status_code == 400
+
+
 def test_last_manager_cannot_be_demoted(admin, new_employee):
     # With two managers, demoting one is allowed.
     _, email = new_employee(role="employee")
