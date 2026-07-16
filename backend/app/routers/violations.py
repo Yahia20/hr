@@ -1,5 +1,4 @@
 import io
-import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -17,12 +16,13 @@ from ..auth import (
     require_user,
 )
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
 def _check_date(value: Optional[str], name: str) -> None:
-    if value and not _DATE_RE.match(value):
-        raise HTTPException(400, f"{name} must be formatted YYYY-MM-DD")
+    if not value:
+        return
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, f"{name} must be a real date formatted YYYY-MM-DD")
 
 
 def _xlsx_safe(value):
@@ -152,9 +152,10 @@ def create_violation(
     else:
         label = p["label"]
 
-    # The HR rep may log on behalf of a colleague, so an explicit name on the
-    # payload wins; otherwise fall back to the signed-in user (the common case).
-    submitted_by = payload.submitted_by.strip() or user.name
+    # Audit trail: the recorder is always the signed-in user. The payload's
+    # submitted_by is ignored (kept only for backward-compatible clients) so it
+    # can't be spoofed to attribute a violation to someone else.
+    submitted_by = user.name
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with db() as conn:

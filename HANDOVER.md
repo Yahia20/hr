@@ -1,5 +1,10 @@
 # HR Disciplinary System — Local Setup, Test, Performance & Deployment Report
 
+> ⚠️ **Outdated point-in-time report (2026-06-06).** Parts of it no longer match
+> the code — notably auth is now cookie sessions + bcrypt (not HTTP Basic), there
+> is no `admin123` default, and the API surface has grown. Treat **`CLAUDE.md`**
+> as the source of truth for current architecture, tables, and endpoints.
+
 **Prepared:** 2026-06-06
 **Scope:** Make the app run locally (the previous hosted deployment is offline), test all features, optimize performance, assess production readiness, and recommend a hosting target for 50–100 users.
 

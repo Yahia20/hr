@@ -74,8 +74,9 @@ def _public(row: dict, tmap: dict) -> dict:
 
 
 def _xlsx_safe(value):
-    """Guard against CSV/formula injection when a cell is opened in Excel."""
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+    """Neutralise Excel formula injection: a cell starting with =, +, -, @ or a
+    control char would otherwise be evaluated as a formula when opened."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + value
     return value
 

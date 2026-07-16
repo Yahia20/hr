@@ -7,10 +7,11 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import bootstrap_admin
-from .db import init_db
+from .db import db, init_db
 from .reminders import send_reminders
 from .routers import auth as auth_router
 from .routers import documents, employees, matrix, permissions, settings, stats, violations
@@ -92,7 +93,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-CSRF-Token"],
 )
 
@@ -113,7 +114,15 @@ async def security_headers(request: Request, call_next):
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    # Verify the database is actually reachable — a bare 200 would let the
+    # platform keep routing traffic to an instance whose DB/volume is down.
+    try:
+        with db() as conn:
+            conn.execute("SELECT 1")
+    except Exception:
+        logger.exception("Health check failed: database unreachable")
+        return JSONResponse({"ok": False, "db": "unreachable"}, status_code=503)
+    return {"ok": True, "db": "ok"}
 
 
 # Auth (login/logout/reset) is the only open router; every other router
