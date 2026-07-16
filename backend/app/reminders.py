@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 
 from .db import db
-from .doc_config import load_thresholds, thresholds_for
+from .doc_config import ALERT_ELIGIBLE_SQL, load_thresholds, thresholds_for
 from .emailer import email_configured, send_email
 from .expiry import ATTENTION_STATUSES, compute_status
 
@@ -31,6 +31,8 @@ _CATEGORY_LABEL = {
     "vehicle": "Vehicle",
     "license": "License",
 }
+# Readable names for the fixed rent slots, so the digest doesn't print raw keys.
+_RENT_LABEL = {"rawda": "Al-Rawda Branch", "hamra": "Al-Hamra Branch", "housing": "Housing"}
 
 
 def _get(conn, key: str, default: str = "") -> str:
@@ -84,7 +86,12 @@ def write_config(recipients: str, enabled: bool) -> dict:
 def collect_due(conn) -> list[dict]:
     """Documents that need attention, most urgent first (per-category thresholds)."""
     tmap = load_thresholds(conn)
-    rows = conn.execute("SELECT * FROM documents").fetchall()
+    # The digest never needs the base64 attachment; skip it to keep the read
+    # light. Orphaned employee documents (owner off the roster) are excluded.
+    rows = conn.execute(
+        "SELECT id, category, owner, title, start_date, end_date, note, "
+        f"created_by, created_at FROM documents WHERE {ALERT_ELIGIBLE_SQL}"
+    ).fetchall()
     items = []
     for r in rows:
         d = dict(r)
@@ -103,7 +110,7 @@ def _describe(d: dict) -> str:
         who = d["owner"] or d["title"] or "—"
     label = _CATEGORY_LABEL.get(d["category"], d["category"])
     if d["category"] == "rent" and d["owner"]:
-        label = f"Rent ({d['owner']})"
+        label = f"Rent — {_RENT_LABEL.get(d['owner'], d['owner'])}"
     days = d["days_left"]
     if d["status"] == "expired":
         tag = f"EXPIRED {abs(days)} day(s) ago"
@@ -150,8 +157,11 @@ def send_reminders(*, require_enabled: bool) -> dict:
         subject, body = build_digest(items)
         results = [send_email(to, subject, body) for to in recipients]
         ok = any(results)
-        with db() as conn:
-            _set(conn, K_LAST_SENT, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        # Only stamp "last sent" when a message actually went out, so the UI
+        # doesn't claim delivery on a run where every send failed.
+        if ok:
+            with db() as conn:
+                _set(conn, K_LAST_SENT, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         return {
             "sent": ok,
             "reason": "ok" if ok else "send_failed",

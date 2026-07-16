@@ -15,7 +15,7 @@ from ..auth import (
     require_role,
 )
 from ..db import db
-from ..doc_config import load_thresholds, thresholds_for
+from ..doc_config import ALERT_ELIGIBLE_SQL, load_thresholds, thresholds_for
 from ..expiry import ATTENTION_STATUSES, compute_status
 from ..schemas import DOCUMENT_CATEGORIES, DocumentIn, DocumentUpdateIn
 
@@ -35,9 +35,24 @@ def _now() -> datetime:
     return datetime.now()
 
 
+# Columns for list/summary reads — everything _public needs EXCEPT the heavy
+# base64 attachment, which is fetched on demand via /{id}/attachment. Selecting
+# the blob for every row bloated dashboard/list reads (up to ~5 MB per row).
+_LIST_COLUMNS = (
+    "id, category, owner, title, start_date, end_date, note, "
+    "(attachment != '') AS has_attachment, created_by, created_at"
+)
+
+
 def _status_for(row: dict, tmap: dict) -> dict:
     yellow, red = thresholds_for(row["category"], tmap)
     return compute_status(row["end_date"], yellow, red)
+
+
+def _has_attachment(row: dict) -> bool:
+    # List queries select a lightweight `has_attachment` flag; create/patch use
+    # RETURNING * which still carries the raw `attachment` column.
+    return bool(row["has_attachment"]) if "has_attachment" in row else bool(row.get("attachment"))
 
 
 def _public(row: dict, tmap: dict) -> dict:
@@ -51,7 +66,7 @@ def _public(row: dict, tmap: dict) -> dict:
         "start_date": row["start_date"],
         "end_date": row["end_date"],
         "note": row["note"],
-        "has_attachment": bool(row["attachment"]),
+        "has_attachment": _has_attachment(row),
         "created_by": row["created_by"],
         "created_at": row["created_at"],
         **_status_for(row, tmap),
@@ -71,7 +86,9 @@ def expiring_documents(_: CurrentUser = Depends(_hr_staff)):
     first, plus counts. Powers the dashboard widget and the sidebar badges."""
     with db() as conn:
         tmap = load_thresholds(conn)
-        rows = conn.execute("SELECT * FROM documents").fetchall()
+        rows = conn.execute(
+            f"SELECT {_LIST_COLUMNS} FROM documents WHERE {ALERT_ELIGIBLE_SQL}"
+        ).fetchall()
 
     items = []
     for r in rows:
@@ -103,7 +120,7 @@ def _query_rows(conn, category: Optional[str], owner: Optional[str], scope: Opti
         params.extend(sorted(cats))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return conn.execute(
-        f"SELECT * FROM documents {where} ORDER BY end_date ASC, id DESC", params
+        f"SELECT {_LIST_COLUMNS} FROM documents {where} ORDER BY end_date ASC, id DESC", params
     ).fetchall()
 
 

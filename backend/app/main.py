@@ -64,7 +64,9 @@ async def _reminder_scheduler() -> None:
             await asyncio.sleep((target - now).total_seconds())
         except asyncio.CancelledError:
             break
-        summary = send_reminders(require_enabled=True)
+        # send_reminders is blocking (SMTP/HTTP); run it off the event loop so
+        # the daily send never freezes concurrent requests.
+        summary = await asyncio.to_thread(send_reminders, require_enabled=True)
         if summary.get("sent"):
             logger.info("Daily document reminder sent: %s", summary)
 
