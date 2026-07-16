@@ -57,6 +57,13 @@ def test_end_before_start_rejected(admin):
     assert r.status_code == 422  # schema-level model validator
 
 
+def test_calendar_invalid_dates_rejected(admin):
+    # Format-valid but nonexistent days must be refused, not just format-checked.
+    assert _mk(admin, end_date="2026-02-31").status_code == 422
+    assert _mk(admin, end_date="2026-99-99").status_code == 422
+    assert _mk(admin, start_date="2026-13-01").status_code == 422
+
+
 def test_slot_uniqueness_and_renew(admin):
     first = _mk(admin, category="iqama", owner="Doc Worker", title="Iqama", end_date=_in(20))
     assert first.status_code == 201, first.text

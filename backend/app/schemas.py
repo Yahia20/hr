@@ -1,5 +1,6 @@
 import base64
 import binascii
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -94,12 +95,18 @@ class UserOut(BaseModel):
     is_active: int = 1
 
 
-import re
-
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
 # Attachments a manager may open inline; keep the allowlist tight.
 ALLOWED_ATTACHMENT_MIME = {"image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"}
+
+
+def _real_date(v: str) -> str:
+    """Reject calendar-invalid dates (e.g. 2026-02-31, 2026-99-99) that a
+    format-only check would accept — the value must be a real day, YYYY-MM-DD."""
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        raise ValueError("must be a real date formatted YYYY-MM-DD")
+    return v
 
 
 class PermissionIn(BaseModel):
@@ -113,9 +120,7 @@ class PermissionIn(BaseModel):
     @field_validator("permission_date")
     @classmethod
     def _valid_date(cls, v: str) -> str:
-        if not _DATE_RE.match(v):
-            raise ValueError("permission_date must be formatted YYYY-MM-DD")
-        return v
+        return _real_date(v)
 
     @field_validator("attachment")
     @classmethod
@@ -167,9 +172,7 @@ class DocumentIn(BaseModel):
     @field_validator("start_date", "end_date")
     @classmethod
     def _valid_date(cls, v: str) -> str:
-        if not _DATE_RE.match(v):
-            raise ValueError("dates must be formatted YYYY-MM-DD")
-        return v
+        return _real_date(v)
 
     @field_validator("attachment")
     @classmethod
@@ -211,9 +214,7 @@ class DocumentUpdateIn(BaseModel):
     @field_validator("start_date", "end_date")
     @classmethod
     def _valid_date(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and not _DATE_RE.match(v):
-            raise ValueError("dates must be formatted YYYY-MM-DD")
-        return v
+        return _real_date(v) if v is not None else v
 
     @field_validator("attachment")
     @classmethod

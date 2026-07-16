@@ -42,9 +42,9 @@ frontend/                    # React + Vite single-page app
 `main.py` still exists in the repo but is superseded by the layout above.)
 
 ## Key business logic
-- **17 incident types** across categories (Attendance, Conduct, Safety, etc.)
+- **29 incident types** across 4 categories (Attendance & Adherence, Personal Attitude, Abusing, Policy Violations) — see `penalties.py` (`MATRIX_DATA`)
 - **5 penalty levels**: Yellow → Orange → Red → Black → Investigation
-- **Escalation engine**: repeat violations within a 30-day reset window escalate to the next penalty level (max 6 steps)
+- **Escalation engine**: repeat violations of the same incident within that incident's reset window (per-incident: 30 / 60 / 90 / 180 days) escalate to the next step; ladders run up to 8 steps (e.g. "Exceed Breaks")
 - **Penalties include**: warnings, day deductions, promotion freezes
 - **Email notifications**: sent when violations are logged
 
