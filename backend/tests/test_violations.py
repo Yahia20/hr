@@ -33,3 +33,41 @@ def test_officer_can_log_but_employee_cannot(admin, new_employee):
     assert _log(officer).status_code == 201
     emp_user, _ = new_employee(role="employee")
     assert _log(emp_user).status_code == 403
+
+
+def test_day_override_clears_hours_and_is_labelled(admin):
+    # First "Food & Beverage" violation is Orange (4.5 hrs + 0.5 day). Overriding
+    # the days must clear the matrix hours so the row isn't deducted twice.
+    r = admin.post("/api/violations", json={
+        "employee_name": "Ovr Guy", "category": "Policy Violations",
+        "incident": "Food & Beverage in Prohibited Areas", "override_days": 3,
+    }, headers=csrf(admin))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["penalty_color"] == "Orange"
+    assert body["deduction_days"] == 3 and body["deduction_hours"] == 0
+    assert "Override" in body["penalty_label"]
+
+
+def test_investigation_can_carry_deduction_and_shows_it(admin):
+    r = admin.post("/api/violations", json={
+        "employee_name": "Inv Guy", "category": "Attendance & Adherence",
+        "incident": "Late Arrival", "force_investigation": True, "override_days": 2,
+    }, headers=csrf(admin))
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["penalty_color"] == "Investigation"
+    assert body["deduction_days"] == 2                       # both allowed together
+    assert "2" in body["penalty_label"] and "Override" in body["penalty_label"]  # not hidden
+
+
+def test_active_freezes_counts_distinct_employees(admin):
+    before = admin.get("/api/stats/dashboard").json()["totals"]["active_freezes"]
+    # Two different first-time Black incidents → two active freezes, one person.
+    for incident in ("Attendance Manipulation", "Early Leave"):
+        r = admin.post("/api/violations", json={
+            "employee_name": "Frozen Guy", "category": "Attendance & Adherence", "incident": incident,
+        }, headers=csrf(admin))
+        assert r.status_code == 201 and r.json()["freeze_months"] == 3
+    after = admin.get("/api/stats/dashboard").json()["totals"]["active_freezes"]
+    assert after - before == 1
