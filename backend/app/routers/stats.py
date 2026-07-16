@@ -14,8 +14,10 @@ def dashboard(_: CurrentUser = Depends(require_role(ROLE_HR_MANAGER, ROLE_HR_OFF
         total_v = conn.execute("SELECT COUNT(*) FROM violations").fetchone()[0]
         total_e = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
         total_d = conn.execute("SELECT COALESCE(SUM(deduction_days), 0) FROM violations").fetchone()[0]
+        # Count distinct employees currently frozen, not the number of freeze
+        # penalties — two active freezes on one person is still one frozen employee.
         active_freezes = conn.execute(
-            """SELECT COUNT(*) FROM violations
+            """SELECT COUNT(DISTINCT employee_name) FROM violations
                WHERE freeze_months > 0
                  AND datetime(created_at, '+' || freeze_months || ' months') > datetime('now')"""
         ).fetchone()[0]

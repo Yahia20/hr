@@ -45,7 +45,7 @@ frontend/                    # React + Vite single-page app
 - **29 incident types** across 4 categories (Attendance & Adherence, Personal Attitude, Abusing, Policy Violations) — see `penalties.py` (`MATRIX_DATA`)
 - **5 penalty levels**: Yellow → Orange → Red → Black → Investigation
 - **Escalation engine**: repeat violations of the same incident within that incident's reset window (per-incident: 30 / 60 / 90 / 180 days) escalate to the next step; ladders run up to 8 steps (e.g. "Exceed Breaks")
-- **Penalties include**: warnings, day deductions, promotion freezes
+- **Penalties include**: warnings, day deductions, promotion freezes. A day-override (`override_days`) replaces the standard deduction and clears the matrix's hour-equivalent (no double deduction); an Investigation may still carry a deduction, and the override is always shown in the label. The dashboard "active freezes" KPI counts **distinct frozen employees**, not freeze rows.
 - **Email notifications**: sent when violations are logged
 
 ## API structure

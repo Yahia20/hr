@@ -142,13 +142,19 @@ def create_violation(
     )
     p = PENALTY_MAP[color]
 
-    applied = (
-        payload.override_days
-        if payload.override_days is not None and payload.override_days >= 0
-        else p["deduction_days"]
-    )
-    if applied != p["deduction_days"] and color != "Investigation":
-        label = f"{color} Card \u2014 {applied} Days Deduction (Override)"
+    override = payload.override_days if (payload.override_days is not None and payload.override_days >= 0) else None
+    applied_days = override if override is not None else p["deduction_days"]
+    # A day-override replaces the standard deduction, so clear the matrix's
+    # hour-equivalent \u2014 otherwise the row would carry both an hours and a days
+    # deduction for the same penalty (double counting).
+    overridden = override is not None and applied_days != p["deduction_days"]
+    applied_hours = 0.0 if overridden else p["deduction_hours"]
+
+    if overridden:
+        # Keep the override visible in the label \u2014 including for Investigation,
+        # which may carry a deduction (both are allowed together).
+        base = p["label"] if color == "Investigation" else f"{color} Card"
+        label = f"{base} \u2014 {applied_days} Days Deduction (Override)"
     else:
         label = p["label"]
 
@@ -169,7 +175,7 @@ def create_violation(
             (
                 payload.employee_name, payload.category, payload.incident,
                 color, label,
-                p["deduction_hours"], applied, p["freeze_months"],
+                applied_hours, applied_days, p["freeze_months"],
                 payload.comment, submitted_by, payload.proof_image,
                 now,
             ),
@@ -192,7 +198,7 @@ def create_violation(
             category=payload.category,
             incident=payload.incident,
             penalty_label=label,
-            deduction_days=applied,
+            deduction_days=applied_days,
             comment=payload.comment,
             submitted_by=submitted_by,
         )
