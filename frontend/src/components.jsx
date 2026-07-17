@@ -129,6 +129,12 @@ export const FG = ({ label, children }) => (
 
 export const inp = { padding: "10px 14px", borderRadius: S.r2, border: `1.5px solid ${S.g200}`, fontSize: 13.5, color: S.g700, fontFamily: "inherit", outline: "none", background: S.w, width: "100%" };
 
+export const chipBtn = (color) => ({
+  display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600,
+  padding: "3px 9px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w,
+  color, cursor: "pointer", fontFamily: "inherit",
+});
+
 Card.propTypes = { children: PropTypes.node, style: PropTypes.object, flush: PropTypes.bool };
 Empty.propTypes = { icon: PropTypes.node, text: PropTypes.string, sub: PropTypes.string, action: PropTypes.node };
 Skeleton.propTypes = { w: PropTypes.oneOfType([PropTypes.number, PropTypes.string]), h: PropTypes.oneOfType([PropTypes.number, PropTypes.string]), style: PropTypes.object };

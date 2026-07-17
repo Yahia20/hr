@@ -3,7 +3,7 @@ import { api } from "../api";
 import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
-import { Card, Empty, SkeletonRows, BtnPri, BtnSec, Th, FG, inp } from "../components";
+import { Card, Empty, SkeletonRows, BtnPri, BtnSec, Th, FG, inp, chipBtn } from "../components";
 import { Modal, ConfirmModal } from "../modal";
 import { useToast } from "../toast";
 
@@ -236,8 +236,3 @@ export default function Permissions({ lang, user }) {
   );
 }
 
-const chipBtn = (color) => ({
-  display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 600,
-  padding: "3px 9px", borderRadius: S.r2, border: `1px solid ${S.g200}`, background: S.w,
-  color, cursor: "pointer", fontFamily: "inherit",
-});
