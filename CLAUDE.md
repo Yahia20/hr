@@ -4,7 +4,7 @@
 An HR disciplinary management system for Travel Gate KSA. It tracks employee violations, auto-calculates escalating penalties using a rules matrix, deducts days, freezes promotions, and generates reports.
 
 ## Tech stack
-- **Backend**: FastAPI, Python — raw `sqlite3` (no ORM) via a `db()` context manager
+- **Backend**: FastAPI, Python — raw SQL via a `db()` context manager. SQLite by default; **PostgreSQL** when `DATABASE_URL` is set (a thin psycopg shim in `db.py` translates placeholders + rows so routers are backend-agnostic)
 - **Frontend**: React + Vite single-page app, bilingual (English/Arabic)
 - **Database**: SQLite (`hr_system.db`); path overridable via `HR_DB_FILE` env var (point at a mounted volume in production)
 - **Deployment**: Docker → **Railway** (see the "Production deployment" section below and `backend/.env.example`).
@@ -88,6 +88,8 @@ The `Dockerfile` builds the SPA and serves it from the FastAPI app (same origin)
 3. The container runs uvicorn with `--proxy-headers --forwarded-allow-ips='*'` so `request.client.host` is the real client IP behind Railway's edge (correct per-IP login lockout and HTTPS/HSTS detection). Without it, all clients share the proxy IP and one burst of failed logins would lock everyone out.
 4. On boot, `_check_production_config()` logs loud warnings for missing/weak prod config (insecure cookies, unset `APP_BASE_URL`/`HR_DB_FILE`). These are warnings, not hard failures.
 
+**PostgreSQL (optional, for managed backups + concurrency):** set `DATABASE_URL` and the app uses Postgres instead of SQLite (`HR_DB_FILE` ignored). To move an existing SQLite database over, run `backend/scripts/migrate_sqlite_to_pg.py --sqlite <file> --pg <DATABASE_URL>` — it copies every row with its original ids (sessions included), advances the id sequences, and verifies row counts + primary-key sets match before reporting success (refuses a non-empty target unless `--force`; `--dry-run` reports without writing). Cutover: deploy with `DATABASE_URL` unset (still SQLite), run the script once, then set `DATABASE_URL` and redeploy. Rollback is removing `DATABASE_URL` (the SQLite file is only read, never modified).
+
 Not yet hardened (recommendations, low priority): container runs as root (non-root user deferred due to Railway volume-permission interaction); backend deps use `>=` ranges rather than pinned versions; the repo root still holds legacy files (`main.py`, `production/`, `*.xlsx`, `HR_Report.html`) that are excluded from the image via `.dockerignore`.
 
 ## Known issues (being fixed)
@@ -116,7 +118,7 @@ docker-compose up --build
 ```
 
 ## Conventions
-- Backend uses raw `sqlite3` (no ORM); open connections via the `db()` context manager in `db.py`, which commits/rolls back automatically. Read-modify-write invariants (violation escalation, permission monthly quota, last-active-manager) call `lock(conn)` as the first statement in the block — it takes the write lock up front (SQLite `BEGIN IMMEDIATE`) so concurrent requests can't slip a stale check-then-write through the gap
+- Backend uses raw SQL (no ORM) over SQLite or PostgreSQL (`DATABASE_URL`); open connections via the `db()` context manager in `db.py`, which commits/rolls back automatically. Write queries use `?` placeholders and `row["col"]`/`row[0]` access — the `db.py` shim adapts both for psycopg, so routers don't care which backend is active. Read-modify-write invariants (violation escalation, permission monthly quota, last-active-manager) call `lock(conn)` as the first statement in the block — it takes the write lock up front (SQLite `BEGIN IMMEDIATE`) so concurrent requests can't slip a stale check-then-write through the gap
 - Penalty calculation logic and the rules matrix live in `penalties.py`
 - Frontend is a React + Vite app (has a build step)
 - All API responses are JSON

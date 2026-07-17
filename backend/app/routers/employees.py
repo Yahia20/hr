@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -10,7 +9,7 @@ from ..auth import (
     CurrentUser,
     require_role,
 )
-from ..db import db
+from ..db import DBError, db
 from ..schemas import Employee, EmployeeIn
 
 logger = logging.getLogger("hr.employees")
@@ -48,8 +47,8 @@ def create_employee(payload: EmployeeIn, _: CurrentUser = Depends(_hr_staff)):
             )
             row = cur.fetchone()
             return dict(row)
-        except sqlite3.Error:
-            # don't echo raw sqlite errors (schema/file details) to the client
+        except DBError:
+            # don't echo raw driver errors (schema/file details) to the client
             logger.exception("Failed to save employee %r", payload.name)
             raise HTTPException(400, "Could not save employee")
 

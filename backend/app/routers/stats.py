@@ -1,4 +1,4 @@
-from collections import Counter
+from datetime import datetime
 
 from fastapi import APIRouter, Depends
 
@@ -8,6 +8,20 @@ from ..db import db
 router = APIRouter(prefix="/stats", tags=["stats"])
 
 
+def _add_months(dt: datetime, months: int) -> datetime:
+    """dt + N months, clamping the day to the target month's length (e.g.
+    Jan 31 + 1 month → Feb 28). Computed in Python so freeze-expiry works the
+    same on SQLite and PostgreSQL (no backend-specific date arithmetic in SQL)."""
+    m = dt.month - 1 + months
+    year, month = dt.year + m // 12, m % 12 + 1
+    for day in (dt.day, 31, 30, 29, 28):
+        try:
+            return dt.replace(year=year, month=month, day=day)
+        except ValueError:
+            continue
+    return dt.replace(year=year, month=month, day=1)
+
+
 @router.get("/dashboard")
 def dashboard(_: CurrentUser = Depends(require_role(ROLE_HR_MANAGER, ROLE_HR_OFFICER))):
     with db() as conn:
@@ -15,12 +29,22 @@ def dashboard(_: CurrentUser = Depends(require_role(ROLE_HR_MANAGER, ROLE_HR_OFF
         total_e = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
         total_d = conn.execute("SELECT COALESCE(SUM(deduction_days), 0) FROM violations").fetchone()[0]
         # Count distinct employees currently frozen, not the number of freeze
-        # penalties — two active freezes on one person is still one frozen employee.
-        active_freezes = conn.execute(
-            """SELECT COUNT(DISTINCT employee_name) FROM violations
-               WHERE freeze_months > 0
-                 AND datetime(created_at, '+' || freeze_months || ' months') > datetime('now')"""
-        ).fetchone()[0]
+        # penalties — two active freezes on one person is still one frozen
+        # employee. The "still active?" check is done in Python so it doesn't
+        # depend on backend-specific SQL date arithmetic.
+        frozen = conn.execute(
+            "SELECT employee_name, created_at, freeze_months FROM violations WHERE freeze_months > 0"
+        ).fetchall()
+        now_dt = datetime.now()
+        frozen_employees = set()
+        for r in frozen:
+            try:
+                started = datetime.strptime(r["created_at"][:19], "%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                continue
+            if _add_months(started, int(r["freeze_months"])) > now_dt:
+                frozen_employees.add(r["employee_name"])
+        active_freezes = len(frozen_employees)
 
         by_color = dict(conn.execute(
             "SELECT penalty_color, COUNT(*) FROM violations GROUP BY penalty_color"
@@ -39,8 +63,8 @@ def dashboard(_: CurrentUser = Depends(require_role(ROLE_HR_MANAGER, ROLE_HR_OFF
 
         monthly = [
             dict(row) for row in conn.execute(
-                """SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS count
-                   FROM violations GROUP BY month ORDER BY month"""
+                """SELECT substr(created_at, 1, 7) AS month, COUNT(*) AS count
+                   FROM violations GROUP BY substr(created_at, 1, 7) ORDER BY month"""
             ).fetchall()
         ]
 
