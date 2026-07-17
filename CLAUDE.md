@@ -88,6 +88,8 @@ The `Dockerfile` builds the SPA and serves it from the FastAPI app (same origin)
 3. The container runs uvicorn with `--proxy-headers --forwarded-allow-ips='*'` so `request.client.host` is the real client IP behind Railway's edge (correct per-IP login lockout and HTTPS/HSTS detection). Without it, all clients share the proxy IP and one burst of failed logins would lock everyone out.
 4. On boot, `_check_production_config()` logs loud warnings for missing/weak prod config (insecure cookies, unset `APP_BASE_URL`/`HR_DB_FILE`). These are warnings, not hard failures.
 
+**PostgreSQL (optional, for managed backups + concurrency):** set `DATABASE_URL` and the app uses Postgres instead of SQLite (`HR_DB_FILE` ignored). To move an existing SQLite database over, run `backend/scripts/migrate_sqlite_to_pg.py --sqlite <file> --pg <DATABASE_URL>` — it copies every row with its original ids (sessions included), advances the id sequences, and verifies row counts + primary-key sets match before reporting success (refuses a non-empty target unless `--force`; `--dry-run` reports without writing). Cutover: deploy with `DATABASE_URL` unset (still SQLite), run the script once, then set `DATABASE_URL` and redeploy. Rollback is removing `DATABASE_URL` (the SQLite file is only read, never modified).
+
 Not yet hardened (recommendations, low priority): container runs as root (non-root user deferred due to Railway volume-permission interaction); backend deps use `>=` ranges rather than pinned versions; the repo root still holds legacy files (`main.py`, `production/`, `*.xlsx`, `HR_Report.html`) that are excluded from the image via `.dockerignore`.
 
 ## Known issues (being fixed)
