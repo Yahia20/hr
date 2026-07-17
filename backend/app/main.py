@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import db as appdb
 from .auth import bootstrap_admin
 from .db import db, init_db
 from .reminders import send_reminders
@@ -72,9 +73,51 @@ async def _reminder_scheduler() -> None:
             logger.info("Daily document reminder sent: %s", summary)
 
 
+def _maybe_migrate_on_boot() -> None:
+    """One-shot SQLite→PostgreSQL migration at startup, gated on MIGRATE_ON_BOOT.
+
+    Lets the Railway cutover be config-only (no terminal): point HR_DB_FILE at the
+    existing SQLite volume, set DATABASE_URL to the new Postgres, set
+    MIGRATE_ON_BOOT=1, deploy. On boot the app copies every row into the (empty)
+    Postgres, verifies it, then serves from Postgres. Remove MIGRATE_ON_BOOT after
+    the first successful boot.
+
+    Idempotent and safe to leave on: it never runs when the target already has
+    data (so a second deploy is a no-op), and it aborts startup loudly if a
+    migration is attempted but fails verification, rather than silently serving a
+    half-copied database.
+    """
+    if not _env_true("MIGRATE_ON_BOOT"):
+        return
+    if not appdb.USING_PG:
+        logger.warning("MIGRATE_ON_BOOT is set but DATABASE_URL is not PostgreSQL — skipping.")
+        return
+
+    from .migration import migrate, target_non_empty
+
+    existing = target_non_empty()
+    if existing:
+        logger.info("MIGRATE_ON_BOOT: target already has data %s — skipping migration.", existing)
+        return
+    if not os.path.exists(appdb.DB_FILE):
+        logger.warning(
+            "MIGRATE_ON_BOOT: no SQLite source at %s — nothing to migrate, starting empty.",
+            appdb.DB_FILE,
+        )
+        return
+
+    logger.info("MIGRATE_ON_BOOT: migrating SQLite %s into PostgreSQL…", appdb.DB_FILE)
+    summary = migrate(appdb.DB_FILE, log=logger.warning)
+    if not summary.get("ok"):
+        raise RuntimeError(f"MIGRATE_ON_BOOT failed: {summary}")
+    logger.info("MIGRATE_ON_BOOT: migrated %s rows and verified: %s",
+                summary.get("total"), summary.get("counts"))
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    _maybe_migrate_on_boot()  # before bootstrap_admin: a migrated users table must not re-seed
     bootstrap_admin()
     _check_production_config()
     task = asyncio.create_task(_reminder_scheduler())
