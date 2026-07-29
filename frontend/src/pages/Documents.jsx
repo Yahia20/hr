@@ -97,9 +97,18 @@ function HistoryModal({ open, doc, t, ar, onClose }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 8 }}>
           {rows.map((h) => (
             <div key={h.id} style={{ padding: "10px 12px", borderRadius: S.r2, border: `1px solid ${S.g100}`, background: S.g50 }}>
-              <div style={{ direction: "ltr", fontSize: 13, fontWeight: 600, color: S.g700, textAlign: ar ? "right" : "left" }}>
-                {h.old_end} → {h.new_end}
-              </div>
+              {/* An entry is a renewal, a reassignment, or both — show each part
+                  only when that side actually changed. */}
+              {h.old_end !== h.new_end && (
+                <div style={{ direction: "ltr", fontSize: 13, fontWeight: 600, color: S.g700, textAlign: ar ? "right" : "left" }}>
+                  {h.old_end} → {h.new_end}
+                </div>
+              )}
+              {h.old_owner !== h.new_owner && (
+                <div style={{ fontSize: 13, fontWeight: 600, color: S.g700 }}>
+                  {t("docOwner")}: {h.old_owner || "—"} → {h.new_owner || "—"}
+                </div>
+              )}
               <div style={{ fontSize: 11.5, color: S.g400, marginTop: 3 }}>{h.changed_by} · {h.changed_at}</div>
             </div>
           ))}
@@ -122,9 +131,13 @@ export function ExpiryBadge({ t, doc }) {
   );
 }
 
-// The shared add/renew form. `ctx` describes the target slot/list item.
-function DocModal({ open, ctx, onClose, onSaved, t, ar }) {
-  const [form, setForm] = useState({ title: "", start: today(), end: plusYear(), note: "", file: EMPTY_FILE });
+// The shared add/edit form. `ctx` describes the target slot/list item. Once a
+// record exists every field is correctable — name, who it belongs to, the dates,
+// the note, and the attachment (keep / replace / remove). Changing an existing
+// attachment is manager-only (mirrors the backend gate); officers can still
+// attach a file where none exists.
+function DocModal({ open, ctx, isManager, onClose, onSaved, t, ar }) {
+  const [form, setForm] = useState({ title: "", owner: "", start: today(), end: plusYear(), note: "", file: EMPTY_FILE, dropAttach: false });
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -134,14 +147,23 @@ function DocModal({ open, ctx, onClose, onSaved, t, ar }) {
     setErr(null);
     setForm({
       title: d?.title ?? ctx.title ?? "",
+      owner: d?.owner ?? ctx.owner ?? "",
       start: d?.start_date ?? today(),
       end: d?.end_date ?? plusYear(),
       note: d?.note ?? "",
       file: EMPTY_FILE,
+      dropAttach: false,
     });
   }, [ctx]);
 
   if (!ctx) return null;
+
+  // Reassigning only makes sense once the record exists: on create the owner is
+  // already fixed by the row/slot the user clicked.
+  const ownerEditable = Boolean(ctx.doc && ctx.ownerOptions?.length);
+  const hasAttach = Boolean(ctx.doc?.has_attachment) && !form.dropAttach && !form.file.b64;
+  // Officers may add a first attachment but not replace/remove an existing one.
+  const attachEditable = isManager || !ctx.doc?.has_attachment;
 
   function onFile(e) {
     const file = e.target.files?.[0];
@@ -149,7 +171,7 @@ function DocModal({ open, ctx, onClose, onSaved, t, ar }) {
     if (!ALLOWED.includes(file.type)) { setErr(t("errFileType")); return; }
     if (file.size > 5 * 1024 * 1024) { setErr(ar ? "الحجم أكبر من 5MB" : "File exceeds 5MB"); return; }
     const reader = new FileReader();
-    reader.onload = () => setForm((f) => ({ ...f, file: { name: file.name, b64: String(reader.result).split(",")[1] || "", mime: file.type } }));
+    reader.onload = () => setForm((f) => ({ ...f, file: { name: file.name, b64: String(reader.result).split(",")[1] || "", mime: file.type }, dropAttach: false }));
     reader.readAsDataURL(file);
     setErr(null);
   }
@@ -157,21 +179,30 @@ function DocModal({ open, ctx, onClose, onSaved, t, ar }) {
   async function save() {
     if (form.end < form.start) { setErr(ar ? "تاريخ النهاية قبل البداية" : "End date is before start date"); return; }
     if (ctx.titleEditable && !form.title.trim()) { setErr(ar ? "الاسم مطلوب" : "Name is required"); return; }
+    if (ownerEditable && !form.owner) { setErr(ar ? "اختر صاحب المستند" : "Choose who this belongs to"); return; }
     setSaving(true);
     setErr(null);
     try {
+      // A new file replaces the old one; "remove" clears it (the server drops the
+      // stored name/type too). Neither touched → the attachment is left alone.
       const attach = form.file.b64
         ? { attachment: form.file.b64, attachment_name: form.file.name, attachment_mime: form.file.mime }
-        : {};
+        : form.dropAttach ? { attachment: "" } : {};
       if (ctx.doc) {
-        await api.updateDocument(ctx.doc.id, { title: form.title, start_date: form.start, end_date: form.end, note: form.note, ...attach });
+        await api.updateDocument(ctx.doc.id, {
+          title: form.title, start_date: form.start, end_date: form.end, note: form.note,
+          ...(ownerEditable ? { owner: form.owner } : {}),
+          ...attach,
+        });
       } else {
         await api.createDocument({ category: ctx.category, owner: ctx.owner || "", title: form.title, start_date: form.start, end_date: form.end, note: form.note, ...attach });
       }
       onSaved();
       onClose();
     } catch (e) {
-      setErr(e?.message === "slot_exists" ? t("errSlotExists") : e?.message || t("errGeneric"));
+      setErr(e?.message === "slot_exists" ? t("errSlotExists")
+        : e?.message === "attachment_locked" ? t("attachLocked")
+        : e?.message || t("errGeneric"));
     } finally {
       setSaving(false);
     }
@@ -180,6 +211,14 @@ function DocModal({ open, ctx, onClose, onSaved, t, ar }) {
   return (
     <Modal open={open} onClose={onClose} title={ctx.heading}>
       <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
+        {ownerEditable && (
+          <FG label={ctx.ownerLabel || t("docOwner")}>
+            <select style={{ ...inp, cursor: "pointer" }} value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })}>
+              {ctx.ownerOptions.some((o) => o.value === form.owner) ? null : <option value={form.owner}>{form.owner}</option>}
+              {ctx.ownerOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </FG>
+        )}
         {ctx.titleEditable && (
           <FG label={ctx.titleLabel || t("docTitle")}>
             <input style={inp} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder={ctx.titleLabel || t("docTitle")} />
@@ -193,11 +232,31 @@ function DocModal({ open, ctx, onClose, onSaved, t, ar }) {
           <textarea style={{ ...inp, resize: "vertical", minHeight: 54 }} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
         </FG>
         <FG label={t("attach")}>
-          <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: S.r2, border: `1.5px dashed ${S.g300}`, cursor: "pointer", background: S.g50, fontSize: 13, color: S.g500 }}>
-            {IC.upload}
-            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{form.file.name || t("chooseFile")}</span>
-            <input type="file" accept="image/*,application/pdf" onChange={onFile} style={{ display: "none" }} />
-          </label>
+          {hasAttach && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", marginBottom: 8, borderRadius: S.r2, border: `1px solid ${S.g100}`, background: S.g50, fontSize: 12.5, color: S.g500 }}>
+              {IC.clip}
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {/* The name is manager-only; officers just see that a file is there. */}
+                {t("currentFile")}: {ctx.doc.attachment_name || t("attach")}
+              </span>
+              {isManager && <button onClick={() => setForm({ ...form, dropAttach: true })} style={chipBtn(S.err)}>{t("removeAttach")}</button>}
+            </div>
+          )}
+          {form.dropAttach && !form.file.b64 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 12.5, color: S.err }}>
+              <span style={{ flex: 1 }}>{t("attachRemoved")}</span>
+              <button onClick={() => setForm({ ...form, dropAttach: false })} style={chipBtn(S.g500)}>{t("undo")}</button>
+            </div>
+          )}
+          {attachEditable ? (
+            <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: S.r2, border: `1.5px dashed ${S.g300}`, cursor: "pointer", background: S.g50, fontSize: 13, color: S.g500 }}>
+              {IC.upload}
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{form.file.name || t("chooseFile")}</span>
+              <input type="file" accept="image/*,application/pdf" onChange={onFile} style={{ display: "none" }} />
+            </label>
+          ) : (
+            <div style={{ fontSize: 12, color: S.g400 }}>{t("attachLocked")}</div>
+          )}
         </FG>
       </div>
       {err && <div style={{ color: S.err, fontSize: 13, marginBottom: 12 }}>{err}</div>}
@@ -228,7 +287,8 @@ function DocLine({ t, ar, doc, isManager, onAdd, onEdit, onView, onDelete, onHis
         {hj && <span style={{ fontSize: 10.5, color: S.g400 }}>{hj}</span>}
       </span>
       <span style={{ color: S.g400, fontSize: 12 }}>{daysText(t, doc)}</span>
-      <button onClick={onEdit} style={chipBtn(S.info)}>{t("renew")}</button>
+      {/* Same form renews and corrects, so it's labelled "Edit". */}
+      <button onClick={onEdit} style={chipBtn(S.info)}>{t("editDoc")}</button>
       {onHistory && <button onClick={onHistory} title={t("history")} style={chipBtn(S.g500)}>{t("history")}</button>}
       {doc.has_attachment && isManager && (
         <button onClick={onView} disabled={busyAttach === doc.id} title={t("viewAttach")} style={chipBtn(S.info)}>{IC.clip} <span>{t("attach")}</span></button>
@@ -309,7 +369,11 @@ export function EmployeeDocs({ lang, user, onChanged }) {
       category,
       owner: empName,
       title: t(category),
-      titleEditable: false,
+      titleEditable: true,
+      titleLabel: t("docTitle"),
+      // Lets a paper filed under the wrong person be moved to the right one.
+      ownerOptions: (employees || []).map((e) => ({ value: e.name, label: e.name })),
+      ownerLabel: t("employee"),
       doc: doc || null,
       heading: `${t(category)} — ${empName}`,
     });
@@ -386,7 +450,7 @@ export function EmployeeDocs({ lang, user, onChanged }) {
           </table>
         </div>
       </Card>
-      <DocModal open={ctx !== null} ctx={ctx} onClose={() => setCtx(null)} onSaved={() => { toast("ok", t("docSaved")); load(); }} t={t} ar={ar} />
+      <DocModal open={ctx !== null} ctx={ctx} isManager={isManager} onClose={() => setCtx(null)} onSaved={() => { toast("ok", t("docSaved")); load(); }} t={t} ar={ar} />
       <ConfirmModal open={confirm !== null} onClose={() => setConfirm(null)} onConfirm={removeDoc} busy={deleting}
         title={t("confirmDel")} body={`${t("del")}: ${confirm?.title || ""} — ${t("irreversible")}`} confirmLabel={t("del")} cancelLabel={t("cancel")} />
       <HistoryModal open={histDoc !== null} doc={histDoc} t={t} ar={ar} onClose={() => setHistDoc(null)} />
@@ -473,8 +537,14 @@ export function CompanyDocs({ lang, user, onChanged }) {
 
       {tab === "rent" ? (
         <RentGrid t={t} ar={ar} docs={docs} isManager={isManager} busyAttach={busyAttach}
-          onAdd={(slot) => setCtx({ category: "rent", owner: slot.owner, title: t(slot.key), titleEditable: false, doc: null, heading: t(slot.key) })}
-          onEdit={(slot, doc) => setCtx({ category: "rent", owner: slot.owner, title: t(slot.key), titleEditable: false, doc, heading: t(slot.key) })}
+          onAdd={(slot) => setCtx({ category: "rent", owner: slot.owner, title: t(slot.key), titleEditable: true, titleLabel: t("docTitle"), doc: null, heading: t(slot.key) })}
+          onEdit={(slot, doc) => setCtx({
+            category: "rent", owner: slot.owner, title: t(slot.key),
+            titleEditable: true, titleLabel: t("docTitle"),
+            ownerOptions: RENT_SLOTS.map((s) => ({ value: s.owner, label: t(s.key) })),
+            ownerLabel: t("docOwner"),
+            doc, heading: t(slot.key),
+          })}
           onView={viewAttachment} onDelete={setConfirm} onHistory={setHistDoc} />
       ) : (
         <OpenList t={t} ar={ar} docs={docs} isManager={isManager} busyAttach={busyAttach}
@@ -485,7 +555,7 @@ export function CompanyDocs({ lang, user, onChanged }) {
           onView={viewAttachment} onDelete={setConfirm} onHistory={setHistDoc} />
       )}
 
-      <DocModal open={ctx !== null} ctx={ctx} onClose={() => setCtx(null)} onSaved={onSaved} t={t} ar={ar} />
+      <DocModal open={ctx !== null} ctx={ctx} isManager={isManager} onClose={() => setCtx(null)} onSaved={onSaved} t={t} ar={ar} />
       <ConfirmModal open={confirm !== null} onClose={() => setConfirm(null)} onConfirm={removeDoc} busy={deleting}
         title={t("confirmDel")} body={`${t("del")}: ${confirm?.title || ""} — ${t("irreversible")}`} confirmLabel={t("del")} cancelLabel={t("cancel")} />
       <HistoryModal open={histDoc !== null} doc={histDoc} t={t} ar={ar} onClose={() => setHistDoc(null)} />

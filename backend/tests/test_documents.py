@@ -86,6 +86,103 @@ def test_open_categories_allow_multiple(admin):
     assert a.json()["id"] != b.json()["id"]
 
 
+def test_patch_reassigns_owner(admin):
+    """A paper filed under the wrong person can be moved to the right one."""
+    did = _mk(admin, category="iqama", owner="Wrong Name", title="Iqama").json()["id"]
+    r = admin.patch(f"/api/documents/{did}", json={"owner": "  Right Name  ", "title": "Iqama 2024"},
+                    headers=csrf(admin))
+    assert r.status_code == 200, r.text
+    assert r.json()["owner"] == "Right Name" and r.json()["title"] == "Iqama 2024"
+
+    rows = admin.get("/api/documents?category=iqama&owner=Right Name").json()
+    assert [d["id"] for d in rows] == [did]
+    assert admin.get("/api/documents?category=iqama&owner=Wrong Name").json() == []
+
+
+def test_patch_owner_collision_rejected(admin):
+    """Moving a slot record onto an owner who already has one is a 409, not a
+    silent overwrite or a 500 from the unique index."""
+    _mk(admin, category="contract", owner="Taken Slot", title="Contract")
+    other = _mk(admin, category="contract", owner="Free Slot", title="Contract").json()["id"]
+    r = admin.patch(f"/api/documents/{other}", json={"owner": "Taken Slot"}, headers=csrf(admin))
+    assert r.status_code == 409 and r.json()["detail"] == "slot_exists"
+    # The failed move left the record where it was.
+    assert admin.get("/api/documents?category=contract&owner=Free Slot").json()[0]["id"] == other
+
+
+def test_patch_cannot_blank_a_slot_owner(admin):
+    did = _mk(admin, category="rent", owner="blankable", title="Some Rent").json()["id"]
+    assert admin.patch(f"/api/documents/{did}", json={"owner": "   "}, headers=csrf(admin)).status_code == 400
+    # Open-list categories have no owner to begin with, so blanking is fine there.
+    lic = _mk(admin, category="license", title="Some License").json()["id"]
+    assert admin.patch(f"/api/documents/{lic}", json={"owner": ""}, headers=csrf(admin)).status_code == 200
+
+
+def test_attachment_name_is_manager_only(admin, new_employee):
+    """A file name leaks what the file holds, so it rides the same gate as the
+    bytes: officers see `has_attachment` but never `attachment_name`."""
+    did = _mk(admin, category="license", title="Named Doc", attachment=TINY_B64,
+              attachment_name="ahmed-medical-report.pdf", attachment_mime="application/pdf").json()["id"]
+
+    officer, _ = new_employee(role="hr_officer")
+    assert officer.get(f"/api/documents/{did}/attachment").status_code == 403
+    row = [d for d in officer.get("/api/documents?category=license").json() if d["id"] == did][0]
+    assert row["has_attachment"] is True and row["attachment_name"] == ""
+    # ...and not through the alert surfaces either.
+    alerts = officer.get("/api/documents/expiring").json()["items"]
+    assert all(i["attachment_name"] == "" for i in alerts)
+
+    mine = [d for d in admin.get("/api/documents?category=license").json() if d["id"] == did][0]
+    assert mine["attachment_name"] == "ahmed-medical-report.pdf"
+
+
+def test_officer_cannot_change_an_existing_attachment(admin, new_employee):
+    """Replacing/clearing a file destroys something the officer can't even open,
+    so it rides the manager gate. Attaching a first file stays open to staff."""
+    officer, _ = new_employee(role="hr_officer")
+
+    # No attachment yet → an officer may add one.
+    did = _mk(officer, category="vehicle", title="Officer Van").json()["id"]
+    r = officer.patch(f"/api/documents/{did}",
+                      json={"attachment": TINY_B64, "attachment_name": "a.png", "attachment_mime": "image/png"},
+                      headers=csrf(officer))
+    assert r.status_code == 200, r.text
+
+    # Now one exists → replacing or clearing it is refused.
+    assert officer.patch(f"/api/documents/{did}", json={"attachment": ""},
+                         headers=csrf(officer)).status_code == 403
+    assert officer.patch(f"/api/documents/{did}",
+                         json={"attachment": "d29ybGQ=", "attachment_name": "b.pdf", "attachment_mime": "application/pdf"},
+                         headers=csrf(officer)).status_code == 403
+    # The file is untouched, and other fields are still editable by the officer.
+    assert admin.get(f"/api/documents/{did}/attachment").json()["attachment"] == TINY_B64
+    assert officer.patch(f"/api/documents/{did}", json={"note": "still fine"},
+                         headers=csrf(officer)).status_code == 200
+    # A manager can do both.
+    assert admin.patch(f"/api/documents/{did}", json={"attachment": ""},
+                       headers=csrf(admin)).status_code == 200
+
+
+def test_patch_replaces_and_removes_attachment(admin):
+    did = _mk(admin, category="vehicle", title="Van", attachment=TINY_B64,
+              attachment_name="old.png", attachment_mime="image/png").json()["id"]
+    rows = admin.get("/api/documents?category=vehicle").json()
+    assert [d for d in rows if d["id"] == did][0]["attachment_name"] == "old.png"
+
+    new_b64 = "d29ybGQ="  # base64("world")
+    r = admin.patch(f"/api/documents/{did}",
+                    json={"attachment": new_b64, "attachment_name": "new.pdf", "attachment_mime": "application/pdf"},
+                    headers=csrf(admin))
+    assert r.status_code == 200 and r.json()["attachment_name"] == "new.pdf"
+    assert admin.get(f"/api/documents/{did}/attachment").json()["attachment"] == new_b64
+
+    # An empty attachment clears the file and its metadata.
+    r = admin.patch(f"/api/documents/{did}", json={"attachment": ""}, headers=csrf(admin))
+    assert r.status_code == 200 and r.json()["has_attachment"] is False
+    assert r.json()["attachment_name"] == ""
+    assert admin.get(f"/api/documents/{did}/attachment").status_code == 404
+
+
 def test_patch_rejects_bad_range(admin):
     did = _mk(admin, category="vehicle", title="Car Insurance").json()["id"]
     r = admin.patch(f"/api/documents/{did}", json={"start_date": _in(20), "end_date": _in(10)}, headers=csrf(admin))
@@ -173,6 +270,74 @@ def test_renewal_history(admin):
     assert hist[0]["new_end"] == _in(400) and hist[0]["old_end"] == _in(200)  # newest first
     assert hist[1]["new_end"] == _in(200) and hist[1]["old_end"] == _in(20)
     assert hist[0]["changed_by"]  # records who renewed
+
+
+def test_reassignment_is_audited(admin):
+    """Moving a paper to another owner must leave a trace — otherwise a record
+    can be shifted between employees with nothing to show who did it."""
+    did = _mk(admin, category="iqama", owner="Audit From", title="Iqama", end_date=_in(30)).json()["id"]
+    r = admin.patch(f"/api/documents/{did}", json={"owner": "Audit To"}, headers=csrf(admin))
+    assert r.status_code == 200, r.text
+
+    hist = admin.get(f"/api/documents/{did}/history").json()
+    assert len(hist) == 1
+    entry = hist[0]
+    assert entry["old_owner"] == "Audit From" and entry["new_owner"] == "Audit To"
+    assert entry["changed_by"]
+    # A pure reassignment is not a renewal: the dates are untouched on both sides.
+    assert entry["old_start"] == entry["new_start"] and entry["old_end"] == entry["new_end"]
+
+
+def test_renewal_leaves_owner_columns_blank(admin):
+    """A date-only edit must not read as a reassignment in the history."""
+    did = _mk(admin, category="contract", owner="Owner Stable", title="Contract", end_date=_in(30)).json()["id"]
+    admin.patch(f"/api/documents/{did}", json={"end_date": _in(300)}, headers=csrf(admin))
+    entry = admin.get(f"/api/documents/{did}/history").json()[0]
+    assert entry["old_owner"] == "" and entry["new_owner"] == ""
+
+
+def test_reassign_and_renew_in_one_edit(admin):
+    did = _mk(admin, category="iqama", owner="Both From", title="Iqama", end_date=_in(30)).json()["id"]
+    admin.patch(f"/api/documents/{did}", json={"owner": "Both To", "end_date": _in(365)}, headers=csrf(admin))
+    entry = admin.get(f"/api/documents/{did}/history").json()[0]
+    assert entry["old_owner"] == "Both From" and entry["new_owner"] == "Both To"
+    assert entry["old_end"] == _in(30) and entry["new_end"] == _in(365)
+
+
+def test_added_columns_reach_a_preexisting_table(tmp_path):
+    """`CREATE TABLE IF NOT EXISTS` skips a table that already exists, so the
+    audit columns must be patched in explicitly or a live database never gets
+    them. Rebuild the pre-upgrade table and check the migration lands."""
+    import sqlite3
+
+    from app.db import _add_missing_columns
+
+    conn = sqlite3.connect(tmp_path / "legacy.db")
+    try:
+        conn.execute(
+            """CREATE TABLE document_history (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT, document_id INTEGER NOT NULL,
+                   old_start TEXT NOT NULL DEFAULT '', old_end TEXT NOT NULL DEFAULT '',
+                   new_start TEXT NOT NULL DEFAULT '', new_end TEXT NOT NULL DEFAULT '',
+                   changed_by TEXT NOT NULL DEFAULT '', changed_at TEXT NOT NULL)"""
+        )
+        conn.execute(
+            "INSERT INTO document_history (document_id, old_end, new_end, changed_at)"
+            " VALUES (1, '2026-01-01', '2027-01-01', '2026-01-01 00:00:00')"
+        )
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(document_history)")}
+        assert "old_owner" not in cols  # the pre-upgrade shape
+
+        _add_missing_columns(conn)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(document_history)")}
+        assert {"old_owner", "new_owner"} <= cols
+        # The existing row survives and back-fills to the empty default.
+        row = conn.execute("SELECT new_end, old_owner, new_owner FROM document_history").fetchone()
+        assert row == ("2027-01-01", "", "")
+
+        _add_missing_columns(conn)  # idempotent: a second boot must not fail
+    finally:
+        conn.close()
 
 
 def test_per_category_thresholds(admin):

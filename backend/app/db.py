@@ -266,6 +266,8 @@ _SCHEMA = """
                 old_end     TEXT    NOT NULL DEFAULT '',
                 new_start   TEXT    NOT NULL DEFAULT '',
                 new_end     TEXT    NOT NULL DEFAULT '',
+                old_owner   TEXT    NOT NULL DEFAULT '',
+                new_owner   TEXT    NOT NULL DEFAULT '',
                 changed_by  TEXT    NOT NULL DEFAULT '',
                 changed_at  TEXT    NOT NULL
             );
@@ -284,6 +286,44 @@ def _render_schema(pk: str, datetime_type: str) -> str:
     return _SCHEMA.replace("{PK}", pk).replace("{DATETIME}", datetime_type)
 
 
+# Columns introduced after a table shipped. `CREATE TABLE IF NOT EXISTS` is a
+# no-op on a database that already has the table, so the schema above alone
+# would never reach an existing deployment — add them explicitly. Every entry
+# must be nullable or carry a DEFAULT so back-filling existing rows is trivial.
+_ADDED_COLUMNS = (
+    # Reassigning a document to another owner is auditable (see routers/documents.py).
+    ("document_history", "old_owner", "TEXT NOT NULL DEFAULT ''"),
+    ("document_history", "new_owner", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _existing_columns(conn, table: str) -> set:
+    if USING_PG:
+        # Called with a raw psycopg connection from init_db(), so pyformat
+        # placeholders. Scoped to the active schema so a same-named table
+        # elsewhere can't mask a genuinely missing column.
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name = %s AND table_schema = current_schema()",
+            (table,),
+        ).fetchall()
+        return {r[0] for r in rows}
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _add_missing_columns(conn) -> None:
+    """Idempotently apply `_ADDED_COLUMNS`. Runs on every boot; a no-op once the
+    columns exist, so it is safe to call repeatedly and in any order.
+
+    Both backends look the column up first rather than using Postgres'
+    ``ADD COLUMN IF NOT EXISTS``: plain ``ALTER TABLE ADD COLUMN`` and
+    ``information_schema`` are universal SQL, so this can't fail on an older
+    server than the one it was written against. A boot must never die here."""
+    for table, column, decl in _ADDED_COLUMNS:
+        if column not in _existing_columns(conn, table):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db() -> None:
     if USING_PG:
         ddl = _render_schema("SERIAL PRIMARY KEY", "TEXT")
@@ -293,6 +333,7 @@ def init_db() -> None:
             for stmt in (s.strip() for s in ddl.split(";")):
                 if stmt:
                     conn.execute(stmt)
+            _add_missing_columns(conn)
             conn.commit()
         finally:
             conn.close()
@@ -305,6 +346,7 @@ def init_db() -> None:
         # property of the file, so setting it once at init is enough.
         raw.execute("PRAGMA journal_mode=WAL")
         raw.executescript(ddl)
+        _add_missing_columns(raw)
         raw.commit()
     finally:
         raw.close()

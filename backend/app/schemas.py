@@ -200,9 +200,11 @@ class DocumentIn(BaseModel):
 
 
 class DocumentUpdateIn(BaseModel):
-    """Partial update for a renewal: change dates/note/title and optionally swap
-    the attachment. Every field is optional; only the supplied ones are applied.
-    An empty-string attachment clears the existing one."""
+    """Partial update for a renewal or a correction: change owner/title/dates/note
+    and optionally swap the attachment. Every field is optional; only the supplied
+    ones are applied. An empty-string attachment clears the existing one.
+    `category` is not editable — a record stays in the list it was filed under."""
+    owner: Optional[str] = Field(None, max_length=120)
     title: Optional[str] = Field(None, max_length=200)
     start_date: Optional[str] = Field(None, min_length=10, max_length=10)
     end_date: Optional[str] = Field(None, min_length=10, max_length=10)
@@ -210,6 +212,11 @@ class DocumentUpdateIn(BaseModel):
     attachment: Optional[str] = Field(None, max_length=MAX_PROOF_B64_CHARS)
     attachment_name: Optional[str] = Field(None, max_length=200)
     attachment_mime: Optional[str] = Field(None, max_length=100)
+
+    @field_validator("owner", "title")
+    @classmethod
+    def _strip(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if v is not None else v
 
     @field_validator("start_date", "end_date")
     @classmethod

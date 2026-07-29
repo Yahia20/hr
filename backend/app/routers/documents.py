@@ -28,6 +28,9 @@ _manager = require_role(ROLE_HR_MANAGER)
 # Categories shown on the "Employee Documents" page; the rest are company docs.
 _EMPLOYEE_CATEGORIES = {"iqama", "contract"}
 _COMPANY_CATEGORIES = {"rent", "vehicle", "license"}
+# One-per-owner categories, guarded by the partial unique index in db.py. Their
+# owner identifies the slot, so it can be corrected but never blanked.
+_SLOT_CATEGORIES = {"iqama", "contract", "rent"}
 
 
 def _now() -> datetime:
@@ -39,7 +42,7 @@ def _now() -> datetime:
 # the blob for every row bloated dashboard/list reads (up to ~5 MB per row).
 _LIST_COLUMNS = (
     "id, category, owner, title, start_date, end_date, note, "
-    "(attachment != '') AS has_attachment, created_by, created_at"
+    "(attachment != '') AS has_attachment, attachment_name, created_by, created_at"
 )
 
 
@@ -54,9 +57,14 @@ def _has_attachment(row: dict) -> bool:
     return bool(row["has_attachment"]) if "has_attachment" in row else bool(row.get("attachment"))
 
 
-def _public(row: dict, tmap: dict) -> dict:
+def _public(row: dict, tmap: dict, is_manager: bool = False) -> dict:
     """A document record without the heavy/private attachment bytes, plus its
-    computed expiry status (using the category's thresholds)."""
+    computed expiry status (using the category's thresholds).
+
+    `attachment_name` rides the same HR-manager gate as the attachment itself:
+    a file name ("ahmed-medical-report.pdf") leaks what the file contains, so
+    officers — who get 403 from /{id}/attachment — must not read it either.
+    They still see `has_attachment`, which is all the UI needs from them."""
     return {
         "id": row["id"],
         "category": row["category"],
@@ -66,6 +74,7 @@ def _public(row: dict, tmap: dict) -> dict:
         "end_date": row["end_date"],
         "note": row["note"],
         "has_attachment": _has_attachment(row),
+        "attachment_name": row["attachment_name"] if is_manager else "",
         "created_by": row["created_by"],
         "created_at": row["created_at"],
         **_status_for(row, tmap),
@@ -81,7 +90,7 @@ def _xlsx_safe(value):
 
 
 @router.get("/expiring")
-def expiring_documents(_: CurrentUser = Depends(_hr_staff)):
+def expiring_documents(user: CurrentUser = Depends(_hr_staff)):
     """Everything that needs attention (yellow / red / expired), most urgent
     first, plus counts. Powers the dashboard widget and the sidebar badges."""
     with db() as conn:
@@ -92,7 +101,7 @@ def expiring_documents(_: CurrentUser = Depends(_hr_staff)):
 
     items = []
     for r in rows:
-        pub = _public(dict(r), tmap)
+        pub = _public(dict(r), tmap, user.role == ROLE_HR_MANAGER)
         if pub["status"] in ATTENTION_STATUSES:
             items.append(pub)
     items.sort(key=lambda d: (d["days_left"] if d["days_left"] is not None else 1 << 30))
@@ -129,7 +138,7 @@ def list_documents(
     category: Optional[str] = Query(None),
     owner: Optional[str] = Query(None),
     scope: Optional[str] = Query(None),
-    _: CurrentUser = Depends(_hr_staff),
+    user: CurrentUser = Depends(_hr_staff),
 ):
     """List tracked documents, soonest expiry first. Filter by category, owner
     and/or scope (employee | company). Attachment bytes are omitted."""
@@ -138,7 +147,8 @@ def list_documents(
     with db() as conn:
         tmap = load_thresholds(conn)
         rows = _query_rows(conn, category, owner, scope)
-    return [_public(dict(r), tmap) for r in rows]
+    is_manager = user.role == ROLE_HR_MANAGER
+    return [_public(dict(r), tmap, is_manager) for r in rows]
 
 
 @router.get("/export")
@@ -196,7 +206,7 @@ def create_document(payload: DocumentIn, user: CurrentUser = Depends(_hr_staff))
                     user.name, _now().strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
-            return _public(dict(cur.fetchone()), tmap)
+            return _public(dict(cur.fetchone()), tmap, user.role == ROLE_HR_MANAGER)
         except IntegrityError:
             # Hit the (owner, category) slot uniqueness for iqama/contract/rent —
             # a record already exists; the caller should renew it (PATCH) instead.
@@ -212,8 +222,18 @@ def update_document(did: int, payload: DocumentUpdateIn, user: CurrentUser = Dep
         if row is None:
             raise HTTPException(404, "Document not found")
 
+        # Replacing or clearing an existing attachment destroys a file the
+        # officer isn't even allowed to open (attachment view is manager-only),
+        # so it rides the same gate. Adding one where none exists stays open to
+        # all HR staff — nothing is hidden or lost by that.
+        touches_attachment = any(
+            k in fields for k in ("attachment", "attachment_name", "attachment_mime")
+        )
+        if touches_attachment and row["attachment"] and user.role != ROLE_HR_MANAGER:
+            raise HTTPException(403, "attachment_locked")
+
         merged = dict(row)
-        for key in ("title", "start_date", "end_date", "note",
+        for key in ("owner", "title", "start_date", "end_date", "note",
                     "attachment", "attachment_name", "attachment_mime"):
             if key in fields:
                 merged[key] = fields[key]
@@ -223,29 +243,45 @@ def update_document(did: int, payload: DocumentUpdateIn, user: CurrentUser = Dep
             merged["attachment_mime"] = ""
         if merged["end_date"] < merged["start_date"]:
             raise HTTPException(400, "end_date must be on or after start_date")
+        if row["category"] in _SLOT_CATEGORIES and not merged["owner"]:
+            raise HTTPException(400, "owner_required")
 
-        # Record a renewal in the history whenever the validity dates change.
-        if merged["start_date"] != row["start_date"] or merged["end_date"] != row["end_date"]:
+        # One audit row per edit that moves the record: a renewal (new validity
+        # dates), a reassignment (new owner), or both at once. Cosmetic edits
+        # (title/note/attachment) leave no trace, as before.
+        # Unchanged sides are written as "" so a reader can tell which kind of
+        # change it was by comparing old/new — including an owner cleared to "".
+        dates_changed = (merged["start_date"] != row["start_date"]
+                         or merged["end_date"] != row["end_date"])
+        owner_changed = merged["owner"] != row["owner"]
+        if dates_changed or owner_changed:
             conn.execute(
                 """INSERT INTO document_history
-                   (document_id, old_start, old_end, new_start, new_end, changed_by, changed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (document_id, old_start, old_end, new_start, new_end,
+                    old_owner, new_owner, changed_by, changed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (did, row["start_date"], row["end_date"], merged["start_date"], merged["end_date"],
+                 row["owner"] if owner_changed else "", merged["owner"] if owner_changed else "",
                  user.name, _now().strftime("%Y-%m-%d %H:%M:%S")),
             )
 
-        cur = conn.execute(
-            """UPDATE documents SET
-                   title = ?, start_date = ?, end_date = ?, note = ?,
-                   attachment = ?, attachment_name = ?, attachment_mime = ?
-               WHERE id = ? RETURNING *""",
-            (
-                merged["title"], merged["start_date"], merged["end_date"], merged["note"],
-                merged["attachment"], merged["attachment_name"], merged["attachment_mime"],
-                did,
-            ),
-        )
-        return _public(dict(cur.fetchone()), tmap)
+        try:
+            cur = conn.execute(
+                """UPDATE documents SET
+                       owner = ?, title = ?, start_date = ?, end_date = ?, note = ?,
+                       attachment = ?, attachment_name = ?, attachment_mime = ?
+                   WHERE id = ? RETURNING *""",
+                (
+                    merged["owner"], merged["title"], merged["start_date"], merged["end_date"],
+                    merged["note"], merged["attachment"], merged["attachment_name"],
+                    merged["attachment_mime"], did,
+                ),
+            )
+        except IntegrityError:
+            # Moving a slot record onto an owner who already has one of this
+            # category — same collision the create path reports.
+            raise HTTPException(409, "slot_exists")
+        return _public(dict(cur.fetchone()), tmap, user.role == ROLE_HR_MANAGER)
 
 
 @router.get("/{did}/history")
