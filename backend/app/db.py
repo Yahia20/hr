@@ -266,6 +266,8 @@ _SCHEMA = """
                 old_end     TEXT    NOT NULL DEFAULT '',
                 new_start   TEXT    NOT NULL DEFAULT '',
                 new_end     TEXT    NOT NULL DEFAULT '',
+                old_owner   TEXT    NOT NULL DEFAULT '',
+                new_owner   TEXT    NOT NULL DEFAULT '',
                 changed_by  TEXT    NOT NULL DEFAULT '',
                 changed_at  TEXT    NOT NULL
             );
@@ -284,6 +286,30 @@ def _render_schema(pk: str, datetime_type: str) -> str:
     return _SCHEMA.replace("{PK}", pk).replace("{DATETIME}", datetime_type)
 
 
+# Columns introduced after a table shipped. `CREATE TABLE IF NOT EXISTS` is a
+# no-op on a database that already has the table, so the schema above alone
+# would never reach an existing deployment — add them explicitly. Every entry
+# must be nullable or carry a DEFAULT so back-filling existing rows is trivial.
+_ADDED_COLUMNS = (
+    # Reassigning a document to another owner is auditable (see routers/documents.py).
+    ("document_history", "old_owner", "TEXT NOT NULL DEFAULT ''"),
+    ("document_history", "new_owner", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _add_missing_columns(conn) -> None:
+    """Idempotently apply `_ADDED_COLUMNS`. Runs on every boot; a no-op once the
+    columns exist, so it is safe to call repeatedly and in any order."""
+    for table, column, decl in _ADDED_COLUMNS:
+        if USING_PG:
+            # Postgres has had ADD COLUMN IF NOT EXISTS since 9.6.
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {decl}")
+        else:
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db() -> None:
     if USING_PG:
         ddl = _render_schema("SERIAL PRIMARY KEY", "TEXT")
@@ -293,6 +319,7 @@ def init_db() -> None:
             for stmt in (s.strip() for s in ddl.split(";")):
                 if stmt:
                     conn.execute(stmt)
+            _add_missing_columns(conn)
             conn.commit()
         finally:
             conn.close()
@@ -305,6 +332,7 @@ def init_db() -> None:
         # property of the file, so setting it once at init is enough.
         raw.execute("PRAGMA journal_mode=WAL")
         raw.executescript(ddl)
+        _add_missing_columns(raw)
         raw.commit()
     finally:
         raw.close()
