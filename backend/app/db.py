@@ -297,17 +297,31 @@ _ADDED_COLUMNS = (
 )
 
 
+def _existing_columns(conn, table: str) -> set:
+    if USING_PG:
+        # Called with a raw psycopg connection from init_db(), so pyformat
+        # placeholders. Scoped to the active schema so a same-named table
+        # elsewhere can't mask a genuinely missing column.
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name = %s AND table_schema = current_schema()",
+            (table,),
+        ).fetchall()
+        return {r[0] for r in rows}
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
 def _add_missing_columns(conn) -> None:
     """Idempotently apply `_ADDED_COLUMNS`. Runs on every boot; a no-op once the
-    columns exist, so it is safe to call repeatedly and in any order."""
+    columns exist, so it is safe to call repeatedly and in any order.
+
+    Both backends look the column up first rather than using Postgres'
+    ``ADD COLUMN IF NOT EXISTS``: plain ``ALTER TABLE ADD COLUMN`` and
+    ``information_schema`` are universal SQL, so this can't fail on an older
+    server than the one it was written against. A boot must never die here."""
     for table, column, decl in _ADDED_COLUMNS:
-        if USING_PG:
-            # Postgres has had ADD COLUMN IF NOT EXISTS since 9.6.
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {decl}")
-        else:
-            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-            if column not in existing:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        if column not in _existing_columns(conn, table):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def init_db() -> None:
