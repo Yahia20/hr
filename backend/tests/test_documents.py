@@ -106,8 +106,10 @@ def test_patch_owner_collision_rejected(admin):
     other = _mk(admin, category="contract", owner="Free Slot", title="Contract").json()["id"]
     r = admin.patch(f"/api/documents/{other}", json={"owner": "Taken Slot"}, headers=csrf(admin))
     assert r.status_code == 409 and r.json()["detail"] == "slot_exists"
-    # The failed move left the record where it was.
+    # The failed move left the record where it was, and the audit row written
+    # before the UPDATE collided was rolled back with it — no orphan history.
     assert admin.get("/api/documents?category=contract&owner=Free Slot").json()[0]["id"] == other
+    assert admin.get(f"/api/documents/{other}/history").json() == []
 
 
 def test_patch_cannot_blank_a_slot_owner(admin):

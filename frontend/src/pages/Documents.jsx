@@ -98,10 +98,11 @@ function HistoryModal({ open, doc, t, ar, onClose }) {
           {rows.map((h) => (
             <div key={h.id} style={{ padding: "10px 12px", borderRadius: S.r2, border: `1px solid ${S.g100}`, background: S.g50 }}>
               {/* An entry is a renewal, a reassignment, or both — show each part
-                  only when that side actually changed. */}
-              {h.old_end !== h.new_end && (
+                  only when that side actually changed. A start-date-only fix
+                  falls back to showing the start dates so no entry renders bare. */}
+              {(h.old_end !== h.new_end || h.old_start !== h.new_start) && (
                 <div style={{ direction: "ltr", fontSize: 13, fontWeight: 600, color: S.g700, textAlign: ar ? "right" : "left" }}>
-                  {h.old_end} → {h.new_end}
+                  {h.old_end !== h.new_end ? `${h.old_end} → ${h.new_end}` : `${h.old_start} → ${h.new_start}`}
                 </div>
               )}
               {h.old_owner !== h.new_owner && (
