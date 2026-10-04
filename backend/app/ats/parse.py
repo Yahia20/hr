@@ -58,13 +58,13 @@ _EMAIL = re.compile(r"(?<![\w.+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![\w.-]
 _PHONE_CANDIDATE = re.compile(r"(?<!\d)(?:\+|00)?\d[\d\s().-]{6,}\d(?!\d)")
 
 _SECTION_HEADINGS = {
-    "experience": {"experience", "work experience", "professional experience", "employment history", "career history", "الخبره", "الخبرات", "الخبره المهنيه", "الخبره العمليه", "التاريخ الوظيفي"},
+    "experience": {"experience", "work experience", "professional experience", "employment history", "career history", "الخبره", "الخبرات", "الخبره المهنيه", "الخبره العمليه", "الخبرات المهنيه", "الخبرات العمليه", "الخبره الوظيفيه", "الخبرات الوظيفيه", "التاريخ الوظيفي"},
     "education": {"education", "academic qualifications", "qualifications", "academic background", "التعليم", "المؤهلات", "المؤهلات العلميه", "التحصيل العلمي"},
     "skills": {"skills", "technical skills", "core skills", "competencies", "المهارات", "المهارات التقنيه", "المهارات الشخصيه"},
     "languages": {"languages", "language skills", "اللغات", "المهارات اللغويه"},
     "contact": {"contact", "contact details", "personal information", "personal details", "معلومات الاتصال", "البيانات الشخصيه"},
     "certifications": {"certifications", "courses", "training", "الشهادات", "الدورات", "التدريب"},
-    "summary": {"summary", "profile", "objective", "professional summary", "الملخص", "الهدف الوظيفي", "نبذه"},
+    "summary": {"summary", "profile", "objective", "professional summary", "الملخص", "الملخص المهني", "الهدف الوظيفي", "نبذه", "نبذه عني"},
     "references": {"references", "المراجع"},
 }
 
@@ -105,13 +105,20 @@ _PRESENT_ALIASES = (
     "current", "ongoing", "now", "حتى تاريخه", "حتي تاريخه", "حتى الآن",
     "حتي الان", "إلى الآن", "الي الان", "الآن", "الان", "حاليا", "مستمر",
 )
-_PRESENT_PATTERN = "|".join(sorted((re.escape(matching_line(value)) for value in _PRESENT_ALIASES), key=len, reverse=True))
+# Whole words only: "present" must not fire inside "presentations" or
+# "representative", nor "الان" inside "والانصراف".
+_PRESENT_PATTERN = r"(?<!\w)(?:" + "|".join(
+    sorted((re.escape(matching_line(value)) for value in _PRESENT_ALIASES), key=len, reverse=True)
+) + r")(?!\w)"
 _ENDPOINT = rf"(?:({_MONTH_PATTERN})\s*[,./-]?\s*((?:19|20)\d{{2}})|((?:0?[1-9]|1[0-2]))[./-]((?:19|20)\d{{2}})|((?:19|20)\d{{2}})[./-]((?:0?[1-9]|1[0-2]))|((?:19|20)\d{{2}})|{_PRESENT_PATTERN})"
 _DATE_RANGE = re.compile(
     rf"(?P<start>{_ENDPOINT})(?:\s*(?:-|–|—|/|\bto\b|\btill\b|\bthrough\b|\buntil\b|الي|حتي(?!\s+الان))\s*|\s+(?={_PRESENT_PATTERN}))(?P<end>{_ENDPOINT})",
     re.I,
 )
 _SIMPLE_YEAR_RANGE = re.compile(r"(?P<start>(?:19|20)\d{2})\s*[-–—/:]\s*(?P<end>(?:19|20)\d{2})")
+_OPEN_RANGE_TAIL = re.compile(
+    rf"\s*(?:-|–|—|\bto\b|\btill\b|\buntil\b|\bthrough\b|الي|حتي)\s*(?P<month>{_MONTH_PATTERN})?\s*$", re.I
+)
 _SINCE_DATE = re.compile(rf"(?:\bsince\b|منذ)\s*(?P<start>{_ENDPOINT})", re.I)
 
 _EMPLOYMENT_CUES = re.compile(
@@ -383,8 +390,31 @@ def _experience(
                 endpoints.append((value, index, match.group(0)))
 
     used: set[int] = set()
+    # An open range ("From June 2019 to March" + "2022" on the next row) names
+    # its own end: pair it with the next endpoint before any order-based pairing,
+    # so a stray year elsewhere cannot shift every later pair.
+    for pos, (value, index, term) in enumerate(endpoints):
+        if pos in used or value == reference_month or pos + 1 >= len(endpoints):
+            continue
+        tail = lines[index][lines[index].find(term) + len(term):]
+        opener = _OPEN_RANGE_TAIL.match(tail)
+        next_value, next_index, next_term = endpoints[pos + 1]
+        if not opener or pos + 1 in used or not 0 < next_index - index <= 3:
+            continue
+        end_value = next_value
+        if opener.group("month") and re.fullmatch(r"(?:19|20)\d{2}", next_term.strip()):
+            end_value = int(next_term) * 12 + _MONTHS[opener.group("month")] - 1
+        interval = _valid_interval(value, end_value, reference_month)
+        if interval and interval[0] < interval[1]:
+            intervals.append(interval)
+            evidence.extend([
+                Evidence(term, readable_lines[index], index),
+                Evidence(next_term, readable_lines[next_index], next_index),
+            ])
+            used.update({pos, pos + 1})
+
     for present_pos, (value, index, term) in enumerate(endpoints):
-        if value != reference_month:
+        if value != reference_month or present_pos in used:
             continue
         candidates = [
             (candidate_value, pos, candidate_index, candidate_term)

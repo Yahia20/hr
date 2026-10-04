@@ -174,3 +174,46 @@ def test_size_limit_is_rejected():
         assert "5 MB" in str(exc)
     else:
         raise AssertionError("oversized CV was accepted")
+
+
+def test_present_alias_is_matched_as_a_whole_word_only():
+    parsed = parse_cv("""Jordan Example
+Experience
+Sales Agent | January 2018 - January 2022
+Travel company representative at trade fairs
+Skills
+Communication & Presentations Skills
+""", reference_date=date(2026, 9, 1))
+    assert parsed.years_experience == 4.0
+
+
+def test_arabic_professional_experience_heading_ends_contact_block():
+    parsed = parse_cv("""سارة مثال
+البيانات الشخصية
+رقم الجوال: 0500000000
+الملخص المهني
+أخصائية خدمة عملاء
+الخبرات المهنية
+خدمة عملاء – شركة مثال (2024 - 2025)
+• متابعة الحضور والانصراف.
+""", reference_date=date(2026, 9, 1))
+    assert parsed.years_experience == 1.0
+    assert "experience" in parsed.sections
+
+
+def test_open_range_rows_pair_with_their_own_end_despite_a_stray_year():
+    parsed = parse_cv("""Robin Example
+Experience
+Travel Agent at Example Travel
+From May 2008 to
+May 2012
+Award 2022
+Senior Travel Consultant at Example Tours
+From June 2019 to March
+2022
+Travel Consultant at Example Holidays
+From January 2014 to
+May 2016
+""", reference_date=date(2026, 9, 1))
+    # 4.0 + 2.75 + 2.33 years; the stray 2022 must not shift the pairing.
+    assert parsed.years_experience == 9.1
