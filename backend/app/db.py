@@ -274,6 +274,149 @@ _SCHEMA = """
             CREATE INDEX IF NOT EXISTS idx_document_history_doc
                 ON document_history (document_id, id);
 
+            CREATE TABLE IF NOT EXISTS job_openings (
+                id                {PK},
+                title             TEXT    NOT NULL,
+                department        TEXT    NOT NULL DEFAULT '',
+                location          TEXT    NOT NULL DEFAULT '',
+                employment_type   TEXT    NOT NULL DEFAULT '',
+                description       TEXT    NOT NULL DEFAULT '',
+                status            TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+                min_years         REAL    NOT NULL DEFAULT 0,
+                min_education     TEXT    NOT NULL DEFAULT '',
+                gates             TEXT    NOT NULL DEFAULT '{}',
+                required_skills   TEXT    NOT NULL DEFAULT '[]',
+                preferred_skills  TEXT    NOT NULL DEFAULT '[]',
+                languages         TEXT    NOT NULL DEFAULT '[]',
+                weights           TEXT    NOT NULL DEFAULT '{}',
+                rubric_version    INTEGER NOT NULL DEFAULT 1,
+                semantic_criteria TEXT    NOT NULL DEFAULT '[]',
+                created_by        TEXT    NOT NULL DEFAULT '',
+                created_at        TEXT    NOT NULL,
+                closed_at         TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS applicants (
+                id                             {PK},
+                job_id                         INTEGER NOT NULL REFERENCES job_openings(id) ON DELETE CASCADE,
+                full_name                      TEXT    NOT NULL DEFAULT '',
+                email                          TEXT    NOT NULL DEFAULT '',
+                phone                          TEXT    NOT NULL DEFAULT '',
+                nationality                    TEXT    NOT NULL DEFAULT '',
+                city                           TEXT    NOT NULL DEFAULT '',
+                source                         TEXT    NOT NULL DEFAULT '',
+                stage                          TEXT    NOT NULL DEFAULT 'new' CHECK (stage IN ('new','screened','shortlisted','interview','offer','hired','rejected')),
+                cv_attachment                  TEXT    NOT NULL DEFAULT '',
+                cv_name                        TEXT    NOT NULL DEFAULT '',
+                cv_mime                        TEXT    NOT NULL DEFAULT '',
+                cv_text                        TEXT    NOT NULL DEFAULT '',
+                parsed                         TEXT    NOT NULL DEFAULT '{}',
+                corrections                    TEXT    NOT NULL DEFAULT '{}',
+                score                          REAL    NOT NULL DEFAULT 0,
+                rules_score                    REAL    NOT NULL DEFAULT 0,
+                final_score                    REAL,
+                score_breakdown                TEXT    NOT NULL DEFAULT '[]',
+                gate_failures                  TEXT    NOT NULL DEFAULT '[]',
+                needs_manual_review            INTEGER NOT NULL DEFAULT 0,
+                notes                           TEXT    NOT NULL DEFAULT '',
+                cv_revision                     INTEGER NOT NULL DEFAULT 1,
+                semantic_status                 TEXT    NOT NULL DEFAULT 'disabled' CHECK (semantic_status IN ('pending','done','partial','failed','disabled','opted_out','manual')),
+                semantic_reason                 TEXT    NOT NULL DEFAULT '',
+                external_processing_consent_at  TEXT,
+                consent_notice_version          TEXT    NOT NULL DEFAULT '',
+                created_by                      TEXT    NOT NULL DEFAULT '',
+                created_at                      TEXT    NOT NULL,
+                updated_at                      TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_applicants_job_score
+                ON applicants (job_id, score DESC);
+            CREATE INDEX IF NOT EXISTS idx_applicants_job_stage
+                ON applicants (job_id, stage);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_applicants_job_email_unique
+                ON applicants (job_id, email) WHERE email <> '';
+
+            CREATE TABLE IF NOT EXISTS applicant_stage_history (
+                id           {PK},
+                applicant_id INTEGER NOT NULL REFERENCES applicants(id) ON DELETE CASCADE,
+                old_stage    TEXT    NOT NULL,
+                new_stage    TEXT    NOT NULL,
+                note         TEXT    NOT NULL DEFAULT '',
+                changed_by   TEXT    NOT NULL DEFAULT '',
+                changed_at   TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_applicant_stage_history_applicant
+                ON applicant_stage_history (applicant_id, id);
+
+            CREATE TABLE IF NOT EXISTS interview_feedback (
+                id           {PK},
+                applicant_id INTEGER NOT NULL REFERENCES applicants(id) ON DELETE CASCADE,
+                interviewer  TEXT    NOT NULL DEFAULT '',
+                result       TEXT    NOT NULL CHECK (result IN ('cleared','rejected')),
+                ratings      TEXT    NOT NULL DEFAULT '[]',
+                avg_rating   REAL    NOT NULL DEFAULT 0,
+                comment      TEXT    NOT NULL DEFAULT '',
+                created_at   TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS skills_taxonomy (
+                id         TEXT    PRIMARY KEY,
+                canonical  TEXT    NOT NULL,
+                category   TEXT    NOT NULL,
+                aliases    TEXT    NOT NULL DEFAULT '[]',
+                is_active  INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS ats_semantic_runs (
+                id                              {PK},
+                applicant_id                    INTEGER NOT NULL REFERENCES applicants(id) ON DELETE CASCADE,
+                cv_revision                     INTEGER NOT NULL,
+                rubric_version                  INTEGER NOT NULL,
+                consent_revision                TEXT    NOT NULL DEFAULT '',
+                input_hash                      TEXT    NOT NULL DEFAULT '',
+                pipeline_version                TEXT    NOT NULL DEFAULT '',
+                redaction_version               TEXT    NOT NULL DEFAULT '',
+                state                           TEXT    NOT NULL DEFAULT '',
+                status                          TEXT    NOT NULL DEFAULT 'pending',
+                attempts                        INTEGER NOT NULL DEFAULT 0,
+                next_retry_at                   TEXT,
+                lease_token                     TEXT,
+                lease_expires_at                TEXT,
+                error_code                      TEXT    NOT NULL DEFAULT '',
+                requested_model                 TEXT    NOT NULL DEFAULT '',
+                returned_model                  TEXT    NOT NULL DEFAULT '',
+                request_id                      TEXT    NOT NULL DEFAULT '',
+                prompt_tokens                   INTEGER NOT NULL DEFAULT 0,
+                completion_tokens               INTEGER NOT NULL DEFAULT 0,
+                total_tokens                    INTEGER NOT NULL DEFAULT 0,
+                tokens                          INTEGER NOT NULL DEFAULT 0,
+                cost                            REAL    NOT NULL DEFAULT 0,
+                attempt_log                     TEXT    NOT NULL DEFAULT '[]',
+                created_at                      TEXT    NOT NULL,
+                updated_at                      TEXT    NOT NULL,
+                completed_at                    TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_ats_semantic_runs_claim
+                ON ats_semantic_runs (status, next_retry_at, lease_expires_at);
+            CREATE INDEX IF NOT EXISTS idx_ats_semantic_runs_applicant
+                ON ats_semantic_runs (applicant_id, id);
+
+            CREATE TABLE IF NOT EXISTS ats_semantic_results (
+                id                       {PK},
+                run_id                   INTEGER NOT NULL REFERENCES ats_semantic_runs(id) ON DELETE CASCADE,
+                criterion_key            TEXT    NOT NULL,
+                question_hash            TEXT    NOT NULL DEFAULT '',
+                p                        REAL    CHECK (p IS NULL OR (p >= 0 AND p <= 1)),
+                classification           TEXT    NOT NULL DEFAULT 'uncertain' CHECK (classification IN ('yes','no','uncertain')),
+                hr_override_value        INTEGER,
+                hr_override_actor        TEXT    NOT NULL DEFAULT '',
+                hr_override_reason       TEXT    NOT NULL DEFAULT '',
+                hr_override_at           TEXT,
+                confirmed_source_ranges  TEXT    NOT NULL DEFAULT '[]',
+                created_at               TEXT    NOT NULL,
+                updated_at               TEXT    NOT NULL,
+                UNIQUE (run_id, criterion_key)
+            );
+
             DROP TABLE IF EXISTS attendance;
             DROP TABLE IF EXISTS office_locations;
             DROP TABLE IF EXISTS office_networks;
@@ -334,6 +477,7 @@ def init_db() -> None:
                 if stmt:
                     conn.execute(stmt)
             _add_missing_columns(conn)
+            _seed_skills_taxonomy(conn, "%s")
             conn.commit()
         finally:
             conn.close()
@@ -347,6 +491,25 @@ def init_db() -> None:
         raw.execute("PRAGMA journal_mode=WAL")
         raw.executescript(ddl)
         _add_missing_columns(raw)
+        _seed_skills_taxonomy(raw, "?")
         raw.commit()
     finally:
         raw.close()
+
+
+def _seed_skills_taxonomy(conn, placeholder: str) -> None:
+    """Seed the editable taxonomy once; later HR edits are never overwritten."""
+    if conn.execute("SELECT COUNT(*) FROM skills_taxonomy").fetchone()[0]:
+        return
+    import json
+    from .ats.taxonomy import SKILLS
+
+    sql = (
+        "INSERT INTO skills_taxonomy (id, canonical, category, aliases, is_active) "
+        f"VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})"
+    )
+    for skill in SKILLS:
+        conn.execute(sql, (
+            skill["id"], skill["canonical"], skill["category"],
+            json.dumps(skill["aliases"], ensure_ascii=False), 1,
+        ))

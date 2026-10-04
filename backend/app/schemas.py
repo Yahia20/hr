@@ -1,7 +1,8 @@
 import base64
 import binascii
+import json
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -258,3 +259,166 @@ class Violation(BaseModel):
     # bloat payloads (~600 KB each). Use GET /violations/{id}/proof to fetch one.
     has_proof: bool = False
     created_at: str
+
+
+# Recruitment / ATS. JSON-shaped criteria stay deliberately flexible because
+# the deterministic engine validates gate and weight names when a job is saved.
+ATS_CV_MIME = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+}
+
+
+class JobIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    department: str = Field("", max_length=120)
+    location: str = Field("", max_length=200)
+    employment_type: str = Field("", max_length=80)
+    description: str = Field("", max_length=20_000)
+    status: str = Field("open", pattern="^(open|closed)$")
+    min_years: float = Field(0, ge=0, le=80)
+    min_education: str = Field("", max_length=50)
+    gates: dict[str, Any] = Field(default_factory=dict)
+    required_skills: list[Any] = Field(default_factory=list, max_length=200)
+    preferred_skills: list[Any] = Field(default_factory=list, max_length=200)
+    languages: list[str] = Field(default_factory=list, max_length=50)
+    weights: dict[str, float] = Field(default_factory=dict)
+    semantic_criteria: list[dict[str, Any]] = Field(default_factory=list, max_length=6)
+
+    @field_validator("title", "department", "location", "employment_type", "min_education")
+    @classmethod
+    def _strip_job_strings(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("languages")
+    @classmethod
+    def _languages_bounded(cls, values: list[str]) -> list[str]:
+        if any(not isinstance(value, str) or len(value.strip()) > 80 for value in values):
+            raise ValueError("each language must be at most 80 characters")
+        return [value.strip() for value in values if value.strip()]
+
+    @model_validator(mode="after")
+    def _bounded_job_json(self):
+        structured = {
+            "gates": self.gates,
+            "required_skills": self.required_skills,
+            "preferred_skills": self.preferred_skills,
+            "weights": self.weights,
+            "semantic_criteria": self.semantic_criteria,
+        }
+        if len(json.dumps(structured, ensure_ascii=False)) > 50_000:
+            raise ValueError("job criteria are too large")
+        return self
+
+
+class ApplicantIn(BaseModel):
+    full_name: str = Field("", max_length=200)
+    email: str = Field("", max_length=254)
+    phone: str = Field("", max_length=80)
+    nationality: str = Field("", max_length=120)
+    city: str = Field("", max_length=120)
+    source: str = Field("", max_length=120)
+    cv_attachment: str = Field(..., min_length=1, max_length=MAX_PROOF_B64_CHARS)
+    cv_name: str = Field(..., min_length=1, max_length=200)
+    cv_mime: str = Field(..., min_length=1, max_length=100)
+    notes: str = Field("", max_length=5000)
+    external_processing_consent_at: Optional[str] = Field(None, max_length=40)
+    consent_notice_version: str = Field("", max_length=80)
+
+    @field_validator("full_name", "email", "phone", "nationality", "city", "source", "cv_name")
+    @classmethod
+    def _strip_applicant_strings(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("email")
+    @classmethod
+    def _valid_optional_email(cls, value: str) -> str:
+        value = value.lower()
+        if value and ("@" not in value or " " in value):
+            raise ValueError("email must be a valid address")
+        return value
+
+    @field_validator("cv_attachment")
+    @classmethod
+    def _valid_cv_base64(cls, value: str) -> str:
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("cv_attachment must be valid base64")
+        if len(raw) > 5 * 1024 * 1024:
+            raise ValueError("CV exceeds the 5 MB limit")
+        return value
+
+    @field_validator("cv_mime")
+    @classmethod
+    def _valid_cv_mime(cls, value: str) -> str:
+        if value not in ATS_CV_MIME:
+            raise ValueError("unsupported CV type")
+        return value
+
+
+class ApplicantPatchIn(BaseModel):
+    notes: Optional[str] = Field(None, max_length=5000)
+    corrections: Optional[dict[str, Any]] = None
+
+    @field_validator("corrections")
+    @classmethod
+    def _bounded_corrections(cls, value: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        if value is not None and len(value) > 20:
+            raise ValueError("too many correction fields")
+        if value is not None and len(json.dumps(value, ensure_ascii=False)) > 20_000:
+            raise ValueError("corrections are too large")
+        return value
+
+
+class StageIn(BaseModel):
+    stage: str = Field(..., pattern="^(new|screened|shortlisted|interview|offer|hired|rejected)$")
+    note: str = Field("", max_length=2000)
+
+
+class FeedbackRatingIn(BaseModel):
+    skill: str = Field(..., min_length=1, max_length=120)
+    score_1_5: int = Field(..., ge=1, le=5)
+
+
+class FeedbackIn(BaseModel):
+    result: str = Field(..., pattern="^(cleared|rejected)$")
+    ratings: list[FeedbackRatingIn] = Field(default_factory=list, max_length=100)
+    comment: str = Field("", max_length=5000)
+
+
+class TaxonomyIn(BaseModel):
+    id: str = Field(..., min_length=1, max_length=100, pattern=r"^[a-z0-9_\-]+$")
+    canonical: str = Field(..., min_length=1, max_length=200)
+    category: str = Field(..., min_length=1, max_length=100)
+    aliases: list[str] = Field(default_factory=list, max_length=200)
+    is_active: bool = True
+
+    @field_validator("id", "canonical", "category")
+    @classmethod
+    def _strip_taxonomy_strings(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("aliases")
+    @classmethod
+    def _bounded_aliases(cls, values: list[str]) -> list[str]:
+        if any(not isinstance(value, str) or not value.strip() or len(value.strip()) > 200 for value in values):
+            raise ValueError("aliases must be non-empty strings of at most 200 characters")
+        return [value.strip() for value in values]
+
+
+class ParsePreviewIn(BaseModel):
+    cv_attachment: str = Field(..., min_length=1, max_length=MAX_PROOF_B64_CHARS)
+    cv_name: str = Field(..., min_length=1, max_length=200)
+    cv_mime: str = Field(..., min_length=1, max_length=100)
+
+    @field_validator("cv_attachment")
+    @classmethod
+    def _valid_preview_base64(cls, value: str) -> str:
+        return ApplicantIn._valid_cv_base64(value)
+
+    @field_validator("cv_mime")
+    @classmethod
+    def _valid_preview_mime(cls, value: str) -> str:
+        return ApplicantIn._valid_cv_mime(value)
