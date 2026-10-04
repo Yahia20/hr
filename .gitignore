@@ -17,3 +17,4 @@ dist/
 hr system-handoff.zip
 .hr-handoff-extract/
 cdp_e2e.py
+ats-samples/
