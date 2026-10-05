@@ -217,3 +217,11 @@ May 2016
 """, reference_date=date(2026, 9, 1))
     # 4.0 + 2.75 + 2.33 years; the stray 2022 must not shift the pairing.
     assert parsed.years_experience == 9.1
+
+
+def test_ticketing_operations_phrasing_matches_the_ticketing_skill():
+    parsed = parse_cv("""Casey Example
+Experience
+Coordinated airline ticketing operations and ticket issuance for walk-in clients
+""")
+    assert "ticketing_operations" in {skill.id for skill in parsed.skills}
