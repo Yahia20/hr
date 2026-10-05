@@ -29,8 +29,20 @@ const CV_MIME = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   txt: "text/plain",
 };
-const ERR = { duplicate_application: "errDuplicate", job_closed: "errJobClosed", invalid_stage_transition: "errStage" };
-const EMPTY_UPLOAD = { file: null, full_name: "", email: "", phone: "", nationality: "", city: "", source: "", notes: "" };
+const ERR = {
+  duplicate_application: "errDuplicate", job_closed: "errJobClosed", invalid_stage_transition: "errStage",
+  notice_required: "errNotice", cv_purged: "frozenNote", invalid_recipient: "errRecipient", stage_emails_disabled: "errEmailsOff",
+  preview_outdated: "errPreviewOutdated", criteria_changed: "errCriteriaChanged",
+};
+const NOTIFY_KEY = { pending: "nsPending", sending: "nsSending", accepted: "nsAccepted", failed: "nsFailed", cancelled: "nsCancelled", unknown: "nsUnknown" };
+const EMPTY_UPLOAD = { file: null, full_name: "", email: "", phone: "", nationality: "", city: "", source: "", notes: "", notice_attested: false, notice_channel: "email" };
+const CHANNEL_KEY = { email: "chEmail", whatsapp: "chWhatsapp", in_person: "chInPerson", other: "chOther" };
+const day = (iso) => (iso ? iso.slice(0, 10) : "");
+
+/** The candidate-facing notice, both languages, with the retention period filled in. */
+export function noticeText(lang, days) {
+  return ["atsNoticeAr", "atsNoticeEn"].map((k) => L[lang][k].replace("{days}", days)).join("\n\n");
+}
 
 const scoreColor = (s) => (s >= 70 ? S.ok : s >= 45 ? S.warn : S.err);
 const eduLabel = (t, v) => { const e = EDU_LEVELS.find(([k]) => k === v); return e && v ? t(e[1]) : "—"; };
@@ -98,6 +110,9 @@ export default function Applicants({ lang, user, initialJob }) {
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState(null);
   const [openId, setOpenId] = useState(null);
+  const [drawerTick, setDrawerTick] = useState(0);
+  const [stageReq, setStageReq] = useState(null); // { applicant, stage }
+  const [policy, setPolicy] = useState(null);
 
   const em = (e) => (ERR[e?.message] ? t(ERR[e.message]) : e?.message || t("errGeneric"));
   const job = jobs.find((j) => j.id === jobId);
@@ -110,6 +125,7 @@ export default function Applicants({ lang, user, initialJob }) {
       })
       .catch(() => toast("err", t("errGeneric")))
       .finally(() => setLoading(false));
+    api.recruitmentPolicy().then(setPolicy).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -148,11 +164,16 @@ export default function Applicants({ lang, user, initialJob }) {
 
   async function submitUpload() {
     if (!upload.file) { setUploadErr(t("chooseCv")); return; }
+    if (!upload.notice_attested) { setUploadErr(t("errNotice")); return; }
     setUploading(true);
     setUploadErr(null);
     try {
       const { file, ...fields } = upload;
-      const created = await api.uploadApplicant(jobId, { ...fields, cv_attachment: file.b64, cv_name: file.name, cv_mime: file.mime });
+      // The period stated in the notice this page produced is the promise the deletion clock is capped at.
+      const created = await api.uploadApplicant(jobId, {
+        ...fields, cv_attachment: file.b64, cv_name: file.name, cv_mime: file.mime,
+        notice_retention_days: policy?.retention_days,
+      });
       toast("ok", t("cvUploaded"));
       setUploadOpen(false);
       setUpload(EMPTY_UPLOAD);
@@ -165,13 +186,17 @@ export default function Applicants({ lang, user, initialJob }) {
     }
   }
 
-  async function move(id, next) {
+  function closeUpload() {
+    setUploadOpen(false);
+    setUpload(EMPTY_UPLOAD); // drop the CV bytes from memory as soon as the dialog closes
+  }
+
+  async function copyNotice() {
     try {
-      await api.moveStage(id, next);
-      toast("ok", t("stageMoved"));
-      await load();
-    } catch (e) {
-      toast("err", em(e));
+      await navigator.clipboard.writeText(noticeText(lang, policy.retention_days));
+      toast("ok", t("noticeCopied"));
+    } catch {
+      toast("err", t("errGeneric"));
     }
   }
 
@@ -187,7 +212,7 @@ export default function Applicants({ lang, user, initialJob }) {
         </div>
         {isHr && job && (
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <BtnSec onClick={() => api.exportApplicants(job.id).then(() => toast("ok", t("exportOk"))).catch(() => toast("err", t("errGeneric")))}>{IC.dl} <span>{t("export")}</span></BtnSec>
+            {isManager && <BtnSec onClick={() => api.exportApplicants(job.id).then(() => toast("ok", t("exportOk"))).catch(() => toast("err", t("errGeneric")))}>{IC.dl} <span>{t("export")}</span></BtnSec>}
             <BtnPri onClick={() => { setUpload(EMPTY_UPLOAD); setUploadErr(null); setUploadOpen(true); }} disabled={job.status !== "open"}>{IC.plus} <span>{t("uploadCv")}</span></BtnPri>
           </div>
         )}
@@ -236,9 +261,9 @@ export default function Applicants({ lang, user, initialJob }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <StageChip stage={r.stage} t={t} />
                       {isHr && (
-                        <select aria-label={t("moveTo")} value="" onChange={(e) => e.target.value && move(r.id, e.target.value)} style={{ ...fld, width: 34, padding: "4px 2px", fontSize: 12 }}>
+                        <select aria-label={t("moveTo")} value="" onChange={(e) => e.target.value && setStageReq({ applicant: r, stage: e.target.value })} style={{ ...fld, width: 34, padding: "4px 2px", fontSize: 12 }}>
                           <option value="">⋯</option>
-                          {(STAGE_NEXT[r.stage] || []).map((s) => <option key={s} value={s}>{t(STAGE_KEY[s])}</option>)}
+                          {(STAGE_NEXT[r.stage] || []).filter((s) => !r.cv_purged_at || s === "rejected").map((s) => <option key={s} value={s}>{t(STAGE_KEY[s])}</option>)}
                         </select>
                       )}
                     </div>
@@ -249,6 +274,8 @@ export default function Applicants({ lang, user, initialJob }) {
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                       {r.gate_failures?.length > 0 && <span title={r.gate_failures.join(", ")} style={{ ...chipBtn(S.err), cursor: "default" }}>{IC.warn2} {t("gateFailed")}</span>}
                       {r.needs_manual_review && <span style={{ ...chipBtn(S.warn), cursor: "default" }}>{t("needsReview")}</span>}
+                      {r.score_stale && <span title={t("scoreStale")} style={{ ...chipBtn(S.g500), cursor: "default" }}>{t("staleShort")}</span>}
+                      {r.cv_purged_at && <span style={{ ...chipBtn(S.g500), cursor: "default" }}>{t("cvRemovedShort")}</span>}
                     </div>
                   </td>
                 </tr>
@@ -258,7 +285,7 @@ export default function Applicants({ lang, user, initialJob }) {
         </div>
       </Card>
 
-      <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title={`${t("uploadCv")} — ${job?.title || ""}`} width={560}>
+      <Modal open={uploadOpen} onClose={closeUpload} title={`${t("uploadCv")} — ${job?.title || ""}`} width={560}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
           <FG label={t("uploadCvSub")}>
             <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: S.r2, border: `1.5px dashed ${S.g300}`, cursor: "pointer", background: S.g50, fontSize: 13, color: S.g500 }}>
@@ -278,20 +305,45 @@ export default function Applicants({ lang, user, initialJob }) {
           <FG label={t("notes")}>
             <textarea style={{ ...fld, resize: "vertical", minHeight: 56 }} value={upload.notes} maxLength={5000} onChange={(e) => setUpload({ ...upload, notes: e.target.value })} />
           </FG>
+          <div style={{ border: `1px solid ${upload.notice_attested ? S.g200 : S.warn}`, borderRadius: S.r2, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: S.g700, cursor: "pointer" }}>
+              <input type="checkbox" checked={upload.notice_attested} onChange={(e) => setUpload({ ...upload, notice_attested: e.target.checked })} style={{ marginTop: 3 }} />
+              <span>{t("noticeAttest")}</span>
+            </label>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <FG label={t("noticeChannel")}>
+                  <select style={fld} value={upload.notice_channel} onChange={(e) => setUpload({ ...upload, notice_channel: e.target.value })}>
+                    {Object.entries(CHANNEL_KEY).map(([v, k]) => <option key={v} value={v}>{t(k)}</option>)}
+                  </select>
+                </FG>
+              </div>
+              <BtnSec onClick={copyNotice} disabled={!policy}><span>{t("copyNotice")}</span></BtnSec>
+            </div>
+          </div>
         </div>
         {uploadErr && <div role="alert" style={{ color: S.err, fontSize: 13, marginBottom: 12 }}>{uploadErr}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <BtnSec onClick={() => setUploadOpen(false)}><span>{t("cancel")}</span></BtnSec>
+          <BtnSec onClick={closeUpload}><span>{t("cancel")}</span></BtnSec>
           <BtnPri onClick={submitUpload} disabled={uploading}>{IC.check} <span>{uploading ? "…" : t("uploadCv")}</span></BtnPri>
         </div>
       </Modal>
 
       {openId != null && (
         <ApplicantDrawer
-          key={openId} id={openId} lang={lang} t={t} ar={ar} mobile={mobile}
+          key={openId} id={openId} tick={drawerTick} lang={lang} t={t} ar={ar} mobile={mobile}
           isHr={isHr} isManager={isManager} em={em}
           onClose={() => setOpenId(null)} onChanged={load}
           onDeleted={() => { setOpenId(null); load(); }}
+          onRequestMove={(applicant, next) => setStageReq({ applicant, stage: next })}
+        />
+      )}
+
+      {stageReq && (
+        <StageDialog
+          req={stageReq} policy={policy} t={t} lang={lang} em={em}
+          onClose={() => setStageReq(null)}
+          onDone={() => { setStageReq(null); load(); setDrawerTick((n) => n + 1); }}
         />
       )}
     </div>
@@ -306,12 +358,97 @@ Applicants.propTypes = {
 
 const TABS = [["eval", "tabEval"], ["profile", "tabProfile"], ["cv", "attach"], ["interview", "tabInterview"], ["history", "history"]];
 
-function ApplicantDrawer({ id, t, ar, mobile, isHr, isManager, em, onClose, onChanged, onDeleted }) {
+/** One confirmation flow for every stage move: note, and an opt-in candidate email with a preview. */
+function StageDialog({ req, policy, t, lang, em, onClose, onDone }) {
+  const toast = useToast();
+  const { applicant, stage } = req;
+  const canEmail = !!policy?.stage_emails_enabled && (policy.email_stages || []).includes(stage) && !applicant.cv_purged_at;
+  const [note, setNote] = useState("");
+  const [notify, setNotify] = useState(false);
+  const [mailLang, setMailLang] = useState(lang);
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    // Drop the old preview immediately and ignore late answers, so HR can only
+    // confirm the message actually on screen (the server checks its hash too).
+    setPreview(null);
+    if (!notify) return undefined;
+    let live = true;
+    api.stageEmailPreview(applicant.id, stage, mailLang)
+      .then((p) => { if (live) setPreview(p); })
+      .catch((e) => live && toast("err", em(e)));
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notify, mailLang]);
+
+  async function confirm() {
+    setBusy(true);
+    try {
+      await api.moveStage(applicant.id, stage, note, notify ? { notify: true, notify_language: mailLang, preview_hash: preview.hash } : {});
+      toast("ok", t(notify ? "emailQueued" : "stageMoved"));
+      onDone();
+    } catch (e) {
+      toast("err", em(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const blocked = notify && preview && !preview.valid_recipient;
+  return (
+    <Modal open onClose={onClose} title={`${t("moveStageTitle")}: ${t(STAGE_KEY[stage])} — ${applicant.full_name || applicant.email || ""}`} width={560}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+        <FG label={t("stageNote")}>
+          <textarea style={{ ...fld, resize: "vertical", minHeight: 50 }} value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)} />
+        </FG>
+        {canEmail && (
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, color: S.g700, cursor: "pointer" }}>
+            <input type="checkbox" checked={notify} onChange={(e) => setNotify(e.target.checked)} />
+            {t("emailCandidate")}
+          </label>
+        )}
+        {notify && (
+          <>
+            <FG label={t("emailLang")}>
+              <select style={fld} value={mailLang} onChange={(e) => setMailLang(e.target.value)}>
+                <option value="ar">{t("langAr")}</option>
+                <option value="en">{t("langEn")}</option>
+              </select>
+            </FG>
+            {preview && (
+              <div style={{ ...box, background: S.g50, fontSize: 13 }}>
+                <div style={{ color: preview.valid_recipient ? S.g600 : S.err, direction: "ltr", textAlign: "start" }}>{t("emailTo")}: {preview.to || "—"}</div>
+                {!preview.valid_recipient && <div role="alert" style={{ color: S.err, marginTop: 4 }}>{t("errRecipient")}</div>}
+                <div style={{ fontWeight: 700, color: S.g800, marginTop: 8 }} dir={mailLang === "ar" ? "rtl" : "ltr"}>{preview.subject}</div>
+                <div style={{ whiteSpace: "pre-wrap", color: S.g600, marginTop: 6 }} dir={mailLang === "ar" ? "rtl" : "ltr"}>{preview.body}</div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+        <BtnSec onClick={onClose}><span>{t("cancel")}</span></BtnSec>
+        <BtnPri onClick={confirm} disabled={busy || blocked || (notify && !preview)}>{IC.check} <span>{busy ? "…" : t("confirmMove")}</span></BtnPri>
+      </div>
+    </Modal>
+  );
+}
+StageDialog.propTypes = {
+  req: PropTypes.shape({ applicant: PropTypes.object.isRequired, stage: PropTypes.string.isRequired }).isRequired,
+  policy: PropTypes.object, t: PropTypes.func.isRequired, lang: PropTypes.string.isRequired, em: PropTypes.func.isRequired,
+  onClose: PropTypes.func.isRequired, onDone: PropTypes.func.isRequired,
+};
+
+function ApplicantDrawer({ id, tick, t, ar, mobile, isHr, isManager, em, onClose, onChanged, onDeleted, onRequestMove }) {
   const toast = useToast();
   const [a, setA] = useState(null);
   const [tab, setTab] = useState("eval");
   const [confirmDel, setConfirmDel] = useState(false);
+  const [eraseAll, setEraseAll] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeReason, setPurgeReason] = useState("withdrawn");
 
   async function reload() {
     try {
@@ -321,33 +458,47 @@ function ApplicantDrawer({ id, t, ar, mobile, isHr, isManager, em, onClose, onCh
       onClose();
     }
   }
+  // While a candidate email is still queued or sending, re-read every few seconds so
+  // History shows the final status (accepted / failed / cancelled) without a manual reload.
+  const emailInFlight = (a?.history || []).some((h) => h.notify_status === "pending" || h.notify_status === "sending");
+  useEffect(() => {
+    if (!emailInFlight) return undefined;
+    const timer = setTimeout(reload, 4000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [a, emailInFlight]);
+
   useEffect(() => {
     reload();
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, tick]);
 
   async function changed() {
     await reload();
     onChanged();
   }
 
-  async function move(next) {
+  async function purge() {
+    setDeleting(true);
     try {
-      await api.moveStage(id, next);
-      toast("ok", t("stageMoved"));
+      await api.purgeCv(id, purgeReason);
+      toast("ok", t("cvRemovedOk"));
+      setPurgeOpen(false);
       await changed();
     } catch (e) {
       toast("err", em(e));
+    } finally {
+      setDeleting(false);
     }
   }
 
   async function remove() {
     setDeleting(true);
     try {
-      await api.deleteApplicant(id);
+      await api.deleteApplicant(id, eraseAll ? { reason: "erasure_request", allForEmail: true } : {});
       toast("ok", t("delOk"));
       setConfirmDel(false);
       onDeleted();
@@ -383,12 +534,24 @@ function ApplicantDrawer({ id, t, ar, mobile, isHr, isManager, em, onClose, onCh
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "12px 0" }}>
                 <StageChip stage={a.stage} t={t} />
-                {isHr && (STAGE_NEXT[a.stage] || []).map((s) => (
-                  <button key={s} onClick={() => move(s)} style={chipBtn(s === "rejected" ? S.err : S.pri)}>→ {t(STAGE_KEY[s])}</button>
+                {isHr && (STAGE_NEXT[a.stage] || []).filter((s) => !a.cv_purged_at || s === "rejected").map((s) => (
+                  <button key={s} onClick={() => onRequestMove(a, s)} style={chipBtn(s === "rejected" ? S.err : S.pri)}>→ {t(STAGE_KEY[s])}</button>
                 ))}
                 {a.needs_manual_review && <span style={{ ...chipBtn(S.warn), cursor: "default" }}>{t("needsReview")}</span>}
-                {isManager && <button onClick={() => setConfirmDel(true)} style={{ ...chipBtn(S.err), marginInlineStart: "auto" }}>{t("del")}</button>}
+                {isManager && (
+                  <span style={{ display: "inline-flex", gap: 6, marginInlineStart: "auto" }}>
+                    {!a.cv_purged_at && <button onClick={() => setPurgeOpen(true)} style={chipBtn(S.warn)}>{t("removeCv")}</button>}
+                    <button onClick={() => { setEraseAll(false); setConfirmDel(true); }} style={chipBtn(S.err)}>{t("del")}</button>
+                  </span>
+                )}
               </div>
+              {(a.erase_after || a.cv_purged_at || a.score_stale) && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10, fontSize: 12 }}>
+                  {a.cv_purged_at && <span style={{ color: S.warn, fontWeight: 600 }}>{t("cvRemovedOn").replace("{d}", day(a.cv_purged_at))} — {t("frozenNote")}</span>}
+                  {a.erase_after && <span style={{ color: S.g500 }}>{t("eraseOn").replace("{d}", day(a.erase_after))}</span>}
+                  {a.score_stale && <span style={{ color: S.g500 }}>{t("scoreStale")}</span>}
+                </div>
+              )}
               <div role="tablist" style={{ display: "flex", gap: 2, overflowX: "auto" }}>
                 {TABS.map(([k, label]) => (
                   <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} style={{ padding: "8px 12px", border: "none", borderBottom: `2px solid ${tab === k ? S.pri : "transparent"}`, background: "transparent", color: tab === k ? S.priD : S.g400, fontWeight: 600, fontSize: 12.5, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>{t(label)}</button>
@@ -397,9 +560,9 @@ function ApplicantDrawer({ id, t, ar, mobile, isHr, isManager, em, onClose, onCh
             </div>
             <div style={{ flex: 1, overflowY: "auto", padding: 24 }}>
               {tab === "eval" && <EvalTab a={a} t={t} />}
-              {tab === "profile" && <ProfileTab a={a} t={t} isHr={isHr} em={em} onSaved={changed} />}
+              {tab === "profile" && <ProfileTab a={a} t={t} isHr={isHr && !a.cv_purged_at} em={em} onSaved={changed} />}
               {tab === "cv" && <CvTab a={a} t={t} isManager={isManager} em={em} />}
-              {tab === "interview" && <InterviewTab a={a} t={t} em={em} onSaved={changed} />}
+              {tab === "interview" && <InterviewTab a={a} t={t} em={em} onSaved={changed} canAdd={!a.cv_purged_at} />}
               {tab === "history" && <HistoryTab a={a} t={t} />}
             </div>
           </>
@@ -407,17 +570,42 @@ function ApplicantDrawer({ id, t, ar, mobile, isHr, isManager, em, onClose, onCh
       </aside>
       <ConfirmModal
         open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={remove} busy={deleting}
-        title={t("confirmDel")} body={`${t("del")}: ${a?.full_name || a?.email || ""} — ${t("irreversible")}`}
+        title={t("confirmDel")}
+        body={(
+          <>
+            {`${t("del")}: ${a?.full_name || a?.email || ""} — ${t("irreversible")}`}
+            {a?.email && (
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, color: S.g700, cursor: "pointer" }}>
+                <input type="checkbox" checked={eraseAll} onChange={(e) => setEraseAll(e.target.checked)} />
+                {t("erasureAll")}
+              </label>
+            )}
+          </>
+        )}
         confirmLabel={t("del")} cancelLabel={t("cancel")}
       />
+      <Modal open={purgeOpen} onClose={() => setPurgeOpen(false)} title={t("removeCvTitle")} width={480}>
+        <p style={{ margin: "0 0 14px", fontSize: 13, color: S.g500, lineHeight: 1.6 }}>{t("removeCvBody")}</p>
+        <FG label={t("removeReason")}>
+          <select style={fld} value={purgeReason} onChange={(e) => setPurgeReason(e.target.value)}>
+            <option value="withdrawn">{t("reasonWithdrawn")}</option>
+            <option value="manual">{t("reasonManual")}</option>
+          </select>
+        </FG>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+          <BtnSec onClick={() => setPurgeOpen(false)}><span>{t("cancel")}</span></BtnSec>
+          <button onClick={purge} disabled={deleting} style={{ ...chipBtn("#fff"), background: S.err, border: "none", padding: "9px 18px", fontSize: 13 }}>{deleting ? "…" : t("removeCv")}</button>
+        </div>
+      </Modal>
     </>
   );
 }
 
 ApplicantDrawer.propTypes = {
-  id: PropTypes.number.isRequired, t: PropTypes.func.isRequired, ar: PropTypes.bool, mobile: PropTypes.bool,
+  id: PropTypes.number.isRequired, tick: PropTypes.number, t: PropTypes.func.isRequired, ar: PropTypes.bool, mobile: PropTypes.bool,
   isHr: PropTypes.bool, isManager: PropTypes.bool, em: PropTypes.func.isRequired,
   onClose: PropTypes.func.isRequired, onChanged: PropTypes.func.isRequired, onDeleted: PropTypes.func.isRequired,
+  onRequestMove: PropTypes.func.isRequired,
 };
 
 const CRIT_LABEL = Object.fromEntries(WEIGHT_KEYS);
@@ -449,7 +637,7 @@ function EvalTab({ a, t }) {
               ))}
             </ul>
           ) : (
-            <p style={{ margin: "8px 0 0", fontSize: 12.5, color: S.g400 }}>{t("noEvidence")}</p>
+            <p style={{ margin: "8px 0 0", fontSize: 12.5, color: S.g400 }}>{t(a.cv_purged_at ? "cvRemovedShort" : "noEvidence")}</p>
           )}
           {c.missing?.length > 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 10, alignItems: "center" }}>
@@ -574,7 +762,9 @@ function CvTab({ a, t, isManager, em }) {
   return (
     <div style={{ ...box, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: S.g600, fontSize: 13 }}>{IC.clip} {a.cv_name || "—"}</span>
-      {isManager ? (
+      {a.cv_purged_at ? (
+        <span style={{ fontSize: 12, color: S.g400 }}>{t("cvRemovedOn").replace("{d}", day(a.cv_purged_at))}</span>
+      ) : isManager ? (
         <BtnSec onClick={open} disabled={busy || !a.has_cv}>{IC.dl} <span>{busy ? "…" : t("downloadCv")}</span></BtnSec>
       ) : (
         <span style={{ fontSize: 12, color: S.g400 }}>{t("cvManagerOnly")}</span>
@@ -584,7 +774,7 @@ function CvTab({ a, t, isManager, em }) {
 }
 CvTab.propTypes = { a: PropTypes.object.isRequired, t: PropTypes.func.isRequired, isManager: PropTypes.bool, em: PropTypes.func.isRequired };
 
-function InterviewTab({ a, t, em, onSaved }) {
+function InterviewTab({ a, t, em, onSaved, canAdd }) {
   const toast = useToast();
   const [result, setResult] = useState("cleared");
   const [ratings, setRatings] = useState([{ skill: "", score_1_5: 3 }]);
@@ -625,7 +815,7 @@ function InterviewTab({ a, t, em, onSaved }) {
           {fb.comment && <p style={{ margin: "6px 0 0", fontSize: 13, color: S.g700, whiteSpace: "pre-wrap" }}>{fb.comment}</p>}
         </div>
       ))}
-      <div style={box}>
+      {canAdd && <div style={box}>
         <div style={{ fontWeight: 700, color: S.g700, fontSize: 13.5, marginBottom: 10 }}>{t("addFeedback")}</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <FG label={t("fbResult")}>
@@ -652,11 +842,11 @@ function InterviewTab({ a, t, em, onSaved }) {
           </FG>
           <div><BtnPri onClick={save} disabled={saving}>{IC.check} <span>{saving ? "…" : t("save")}</span></BtnPri></div>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }
-InterviewTab.propTypes = { a: PropTypes.object.isRequired, t: PropTypes.func.isRequired, em: PropTypes.func.isRequired, onSaved: PropTypes.func.isRequired };
+InterviewTab.propTypes = { a: PropTypes.object.isRequired, t: PropTypes.func.isRequired, em: PropTypes.func.isRequired, onSaved: PropTypes.func.isRequired, canAdd: PropTypes.bool };
 
 function HistoryTab({ a, t }) {
   const items = a.history || [];
@@ -669,6 +859,11 @@ function HistoryTab({ a, t }) {
             <StageChip stage={h.old_stage} t={t} /> → <StageChip stage={h.new_stage} t={t} />
           </span>
           <div style={{ fontSize: 12, color: S.g400, marginTop: 3 }}>{h.changed_at} · {t("by")} {h.changed_by}</div>
+          {NOTIFY_KEY[h.notify_status] && (
+            <div style={{ fontSize: 12, marginTop: 2, color: h.notify_status === "accepted" ? S.ok : h.notify_status === "pending" || h.notify_status === "sending" ? S.g500 : S.err }}>
+              {t(NOTIFY_KEY[h.notify_status])}{h.notified_at ? ` · ${h.notified_at.replace("T", " ").replace("Z", " UTC")}` : ""}
+            </div>
+          )}
           {h.note && <div style={{ fontSize: 12.5, color: S.g600, marginTop: 2 }}>{h.note}</div>}
         </li>
       ))}

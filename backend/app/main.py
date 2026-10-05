@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from . import db as appdb
 from .auth import bootstrap_admin
 from .db import db, init_db
+from .recruitment_privacy import recover_interrupted_emails, sweep as retention_sweep
 from .reminders import send_reminders
 from .routers import auth as auth_router
 from .routers import documents, employees, matrix, permissions, recruitment, settings, stats, violations
@@ -73,6 +74,27 @@ async def _reminder_scheduler() -> None:
             logger.info("Daily document reminder sent: %s", summary)
 
 
+# The ATS retention sweep runs shortly after boot (so downtime never skips it)
+# and then every RETENTION_INTERVAL. Deadlines are absolute UTC instants, so a
+# frequent cheap check is simpler than a wall-clock schedule.
+RETENTION_FIRST_DELAY = 60
+RETENTION_INTERVAL = 6 * 3600
+
+
+async def _retention_scheduler() -> None:
+    delay = RETENTION_FIRST_DELAY
+    while True:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            break
+        delay = RETENTION_INTERVAL
+        try:
+            await asyncio.to_thread(retention_sweep, dry_run=False)
+        except Exception:  # never let one bad sweep end the loop
+            logger.exception("ATS retention sweep failed")
+
+
 def _maybe_migrate_on_boot() -> None:
     """One-shot SQLite→PostgreSQL migration at startup, gated on MIGRATE_ON_BOOT.
 
@@ -120,11 +142,13 @@ async def lifespan(_app: FastAPI):
     _maybe_migrate_on_boot()  # before bootstrap_admin: a migrated users table must not re-seed
     bootstrap_admin()
     _check_production_config()
-    task = asyncio.create_task(_reminder_scheduler())
+    recover_interrupted_emails()
+    tasks = [asyncio.create_task(_reminder_scheduler()), asyncio.create_task(_retention_scheduler())]
     try:
         yield
     finally:
-        task.cancel()
+        for task in tasks:
+            task.cancel()
 
 
 app = FastAPI(title="HR Disciplinary API", version="1.0.0", lifespan=lifespan)

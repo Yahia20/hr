@@ -26,6 +26,7 @@ export default function TaxonomyEditor({ lang }) {
   const [err, setErr] = useState(null);
   const [preview, setPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
+  const [attested, setAttested] = useState(false);
 
   const load = () => api.listTaxonomy().then(setItems).catch(() => toast("err", t("errGeneric")));
   useEffect(() => {
@@ -69,6 +70,7 @@ export default function TaxonomyEditor({ lang }) {
     if (!file) return;
     const mime = CV_MIME[(file.name.split(".").pop() || "").toLowerCase()];
     if (!mime) { toast("err", t("errCvType")); return; }
+    if (!attested) { toast("err", t("errNotice")); return; }
     setPreviewing(true);
     try {
       const b64 = await new Promise((resolve, reject) => {
@@ -77,7 +79,7 @@ export default function TaxonomyEditor({ lang }) {
         r.onerror = reject;
         r.readAsDataURL(file);
       });
-      setPreview({ name: file.name, ...(await api.parsePreview({ cv_attachment: b64, cv_name: file.name, cv_mime: mime })) });
+      setPreview({ name: file.name, ...(await api.parsePreview({ cv_attachment: b64, cv_name: file.name, cv_mime: mime, notice_attested: true })) });
     } catch (err2) {
       toast("err", err2?.message || t("errGeneric"));
     } finally {
@@ -108,6 +110,10 @@ export default function TaxonomyEditor({ lang }) {
       <div style={{ borderTop: `1px solid ${S.g100}`, paddingTop: 14 }}>
         <div style={{ fontSize: 13.5, fontWeight: 600, color: S.g700 }}>{t("testCv")}</div>
         <div style={{ fontSize: 12, color: S.g400, margin: "2px 0 10px" }}>{t("testCvSub")}</div>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: S.g700, cursor: "pointer", marginBottom: 10 }}>
+          <input type="checkbox" checked={attested} onChange={(e) => setAttested(e.target.checked)} style={{ marginTop: 3 }} />
+          <span>{t("noticeAttest")}</span>
+        </label>
         <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: S.r2, border: `1.5px dashed ${S.g300}`, cursor: "pointer", background: S.g50, fontSize: 13, color: S.g500 }}>
           {IC.upload}
           <span style={{ flex: 1 }}>{previewing ? "…" : preview?.name || t("chooseCv")}</span>

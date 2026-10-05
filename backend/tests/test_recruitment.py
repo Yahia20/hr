@@ -107,6 +107,8 @@ def _upload(client, job_id, email=None, **changes):
         "cv_attachment": _cv(email, skills=skills, years=years),
         "cv_name": "synthetic.txt",
         "cv_mime": "text/plain",
+        "notice_attested": True,
+        "notice_channel": "email",
     }
     payload.update(changes)
     return client.post(
@@ -280,7 +282,7 @@ def test_parse_preview_does_not_persist_and_stats(admin):
     email = f"preview{next(_seq)}@example.test"
     preview = admin.post(
         "/api/recruitment/parse-preview",
-        json={"cv_attachment": _cv(email), "cv_name": "preview.txt", "cv_mime": "text/plain"},
+        json={"cv_attachment": _cv(email), "cv_name": "preview.txt", "cv_mime": "text/plain", "notice_attested": True},
         headers=csrf(admin),
     )
     assert preview.status_code == 200

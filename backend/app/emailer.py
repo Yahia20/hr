@@ -81,6 +81,13 @@ def email_from() -> str:
     return SMTP_FROM
 
 
+def _mask(address: str) -> str:
+    """Log-safe form of an address: first character + domain (candidates and
+    employees are both recipients; logs must not collect their addresses)."""
+    local, _, domain = (address or "").partition("@")
+    return f"{local[:1]}***@{domain}" if domain else "***"
+
+
 def _post_json(url: str, headers: dict, body: dict, provider: str, to: str) -> bool:
     data = json.dumps(body).encode()
     base = {
@@ -95,11 +102,11 @@ def _post_json(url: str, headers: dict, body: dict, provider: str, to: str) -> b
         with urllib.request.urlopen(req, timeout=15) as resp:
             return 200 <= resp.status < 300
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
-        logger.error("%s rejected email to %s: HTTP %s %s", provider, to, e.code, detail)
+        # The provider's body can echo the recipient back; log the status only.
+        logger.error("%s rejected email to %s: HTTP %s", provider, _mask(to), e.code)
         return False
-    except OSError:
-        logger.exception("Failed to reach %s for %s", provider, to)
+    except OSError as e:
+        logger.error("Failed to reach %s for %s: %s", provider, _mask(to), type(e).__name__)
         return False
 
 
@@ -139,8 +146,9 @@ def _send_via_smtp(to: str, subject: str, body: str) -> bool:
             srv.login(SMTP_USER, SMTP_PASSWORD)
             srv.send_message(msg)
         return True
-    except (smtplib.SMTPException, OSError):
-        logger.exception("Failed to send email to %s", to)
+    except (smtplib.SMTPException, OSError) as e:
+        # Exception text (e.g. SMTPRecipientsRefused) contains the address itself.
+        logger.error("Failed to send email to %s: %s", _mask(to), type(e).__name__)
         return False
 
 
@@ -154,7 +162,7 @@ def send_email(to: str, subject: str, body: str) -> bool:
         return _send_via_resend(to, subject, body)
     if smtp_configured():
         return _send_via_smtp(to, subject, body)
-    logger.warning("No email transport configured; email to %s not sent. Subject: %s", to, subject)
+    logger.warning("No email transport configured; email to %s not sent.", _mask(to))
     return False
 
 

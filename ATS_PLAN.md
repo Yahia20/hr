@@ -334,18 +334,53 @@ with reasons, move stages, record interview feedback — without leaving the app
 
 ---
 
-## Phase 4 — Privacy, retention, notifications · 1 day
+## Phase 4 — Privacy, retention, notifications · done 2026-10-05
 
-- `app_settings`: `ats_cv_retention_days` (default 180). Nightly job (reuse the
-  reminders scheduler) blanks `cv_attachment`/`cv_text` of `rejected`/`hired`
-  applicants older than that; keeps the record and score. Logged. Retention also
-  covers derived data: `parsed`, `corrections`, semantic runs/results and their
-  input snapshots, exports.
-- Consent text shown on upload ("candidate consented to processing for
-  recruitment" checkbox stored as `consent_at`) — needed under PDPL.
-- Optional email to applicant on stage change (template per stage, off by
-  default) via the existing `emailer.py`.
-- `SECURITY_AUDIT.md`: add the CV endpoints to the attachment-access section.
+Design reviewed with astra (Codex) before implementation; see SECURITY_AUDIT F-23…F-26.
+
+- **Retention clock** (`app/recruitment_privacy.py`): set ONCE when an application
+  first becomes `rejected`/`hired` or its job closes — `retention_started_at`,
+  `erase_after`, `retention_days_snapshot` (UTC). Re-scoring, edits, reactivation
+  and reopening never extend it. At `erase_after` the whole application is
+  hard-deleted (children cascade). `ats_retention_days` default 180, 1–365,
+  HR Manager; new value applies to clocks started afterwards. No disable toggle.
+- **Sweep**: in-app task 60 s after boot and every 6 h (`main.py`), per-row locked
+  transactions, failures isolated; `POST /recruitment/retention/run?dry_run=` (dry
+  run reads only); last attempt / last success in `ats_retention_last`.
+- **Early CV removal** (`POST /applicants/{id}/purge-cv`, reason `withdrawn|manual`,
+  HR Manager): clears file, text, parsed, corrections, evidence lines, gate
+  failures, source/nationality/city, notes, stage notes, feedback, semantic rows;
+  keeps identity, stage and numeric score until `erase_after`. Afterwards: CV 410,
+  PATCH/feedback 409, only a move to `rejected` allowed, skipped by re-scoring
+  (`score_stale` shown).
+- **Erasure request**: `DELETE /applicants/{id}?reason=erasure_request&all_for_email=true`.
+  Every expiry / removal / deletion is logged in `ats_privacy_events` (ids only).
+- **Notice attestation** (not "consent"): upload requires HR to confirm the
+  candidate was given the privacy notice and how (email / WhatsApp / in person /
+  other); parse-preview requires the confirmation only. Stored with time, user,
+  `NOTICE_VERSION` and the retention days stated in the notice HR sent
+  (`notice_retention_days`, sent by the page that produced the notice; today's
+  setting if absent) — the clock is capped at that promise. The UI copies
+  the bilingual notice text (with the current period) for HR to send.
+- **Write safety** (fixed after astra's code review): one cooperating lock for
+  upload (re-checks job status + criteria version before insert), close/edit job
+  (read-version-write inside the lock), PATCH / re-score publication (applicant
+  `row_version` AND job `rubric_version` must be unchanged → 409 `conflict` / row
+  skipped), feedback (purge check + insert in one transaction), purge.
+- **Candidate emails**: global toggle off by default; per-move opt-in checkbox in
+  one shared stage dialog with recipient + message preview; stages interview /
+  offer / rejected; EN+AR templates editable by the HR Manager, `{name}`/`{job}`
+  only. The message is rendered at confirmation, must match the previewed hash,
+  and is stored on the history row; the worker sends the stored text only if the
+  row is still the applicant's latest move and the CV was not removed.
+  BackgroundTasks send, status pending → sending → accepted|failed|cancelled;
+  restart turns pending → cancelled and sending → unknown, never resent. History
+  in the UI shows the status.
+- API responses never include the CV's full text (`parsed.readable_text` etc.).
+  Bulk export is HR Manager only. Email logs mask addresses.
+- **Open / not in the app:** HR/legal sign-off on the period and the notice
+  text; backup copies and restore-time re-deletion; deleting exports, inbox and
+  WhatsApp copies; access/correction requests are handled by HR manually.
 
 ---
 

@@ -139,6 +139,32 @@ not tracked).
 - **File:** `frontend/src/App.jsx:115`
 - **Risk:** Third-party runtime dependency leaks user IPs to Google, blocks a strict CSP, and breaks offline/intranet use. Recommend self-hosting the two font families (Phase 3, with the rest of the UI work).
 
+## Recruitment (ATS) — personal data in CVs (added 2026-10-05)
+
+### F-23 — CV contents reachable beyond the manager CV download ✅ FIXED
+- **File:** `backend/app/routers/recruitment.py` (`_applicant_public`, `parse_preview`)
+- **Risk:** applicant detail returned the parser output, which carries the CV's full readable and normalised text, to HR officers and to department heads of the job's department. Manager-only CV download therefore did not mean manager-only access to the CV's contents.
+- **Fix applied:** `readable_text`, `normalized_text`, `line_map` and `sections` are stripped from every API response (detail, list, PATCH, upload, parse-preview), and parse-preview returns extraction metadata only (pages, review flag, warnings), never the extracted text. Evidence lines in the score breakdown stay, because they are the reason for each point.
+
+### F-24 — CV and applicant data access map ✅ DOCUMENTED
+- CV file + text: stored base64 / text in `applicants`; only `GET /api/recruitment/applicants/{id}/cv` returns the file, **HR Manager only**; 410 once the CV is removed.
+- Bulk export `GET /api/recruitment/jobs/{id}/export` (names, emails, phones, scores): **HR Manager only**; cells neutralised against formula injection.
+- Upload requires HR's attestation that the candidate was given the privacy notice and through which channel; parse-preview requires the attestation (`notice_required` otherwise). Stored per applicant: notice version, channel, time, attesting user, and the retention period stated in the notice HR sent — the deletion clock never exceeds that promise. A record whose CV was removed cannot be given a new candidate email.
+- Department heads read applicants of their own department's jobs only; no CV file, no export, no edits except interview feedback.
+
+### F-25 — Retention and erasure ✅ IMPLEMENTED (policy period needs HR/legal sign-off)
+- The retention clock starts once (first rejection/hire or job close) and is never extended; at `erase_after` the whole application and its children are deleted by the in-app sweep (on boot + every 6 h). Default 180 days, editable 1–365 by the HR Manager — this is a business-policy ceiling, not a period PDPL prescribes.
+- Early "remove CV" (withdrawn / HR decision) clears the file, text, parsed data, notes, stage notes, feedback and semantic rows; identity, stage and numeric score stay until `erase_after`, and the record is frozen.
+- Erasure request = delete every application with that email. Every expiry, removal and deletion is written to `ats_privacy_events`: applicant/job ids, reason code, and the acting staff user's id (or `scheduler`) — no candidate data.
+- Removing a CV also starts the deletion clock if it had not started (so the identity left behind is never kept indefinitely), cancels any queued candidate email, and freezes the record: later notes are discarded and feedback is refused.
+- Writers coordinate on one lock: uploads re-check the job's status and criteria version inside the insert transaction; job edits read, version and write under the lock; score publications (PATCH, re-score) apply only if both the applicant's version and the job's criteria version are unchanged.
+- **Not covered by the app:** Railway Postgres backups and the off-platform dumps in `Downloads/hr-db-backups/` keep deleted CVs until those copies expire; Excel exports, mailbox and WhatsApp copies of CVs must be deleted by HR. A database restore must re-apply deletions recorded in `ats_privacy_events` before the restored data is used.
+
+### F-26 — Candidate emails and email logs ✅ FIXED
+- Candidate stage emails are off by default and are sent only when HR ticks the box on that specific move, after a preview showing the recipient. Plain text, only `{name}` and `{job}` placeholders, never scores or rejection reasons. Status `accepted` means the provider accepted it, not that it was delivered; interrupted sends become `unknown` and are never retried automatically.
+- The message is rendered when HR confirms the move, must match the hash of the preview HR saw (`preview_outdated` otherwise), and is stored on the stage-history row; the worker sends that stored text. A newer stage move or a CV removal cancels a still-queued email.
+- `emailer.py` logs mask recipient addresses and log only provider, status code or exception class — no subjects, provider response bodies or exception messages (which can contain the address).
+
 ---
 
 ## Recommended next steps

@@ -7,6 +7,7 @@ import { IC } from "../icons";
 import { Card, BtnPri, BtnSec, inp } from "../components";
 import { useToast } from "../toast";
 import TaxonomyEditor from "./Taxonomy";
+import RecruitmentPrivacy from "./RecruitmentPrivacy";
 
 const ROLE_LABEL_KEY = { hr_manager: "roleManager", hr_officer: "roleOfficer", dept_head: "roleDeptHead", employee: "roleEmployee" };
 
@@ -254,6 +255,13 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
           <div style={{ marginTop: 16 }}>
             <BtnPri onClick={saveThr} disabled={thrSaving}>{IC.check} <span>{thrSaving ? "…" : t("save")}</span></BtnPri>
           </div>
+        </Section>
+      )}
+
+      {/* Recruitment retention + candidate emails — managers only */}
+      {isManager && (
+        <Section icon={IC.shield} title={t("privTitle")} sub={t("privSub")}>
+          <RecruitmentPrivacy lang={lang} />
         </Section>
       )}
 

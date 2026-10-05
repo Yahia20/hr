@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 
@@ -23,12 +23,17 @@ from ..auth import (
     require_role,
 )
 from ..db import IntegrityError, db, lock
+from ..emailer import email_configured
+from .. import recruitment_privacy as privacy
 from ..schemas import (
     ApplicantIn,
     ApplicantPatchIn,
+    EmailSettingsIn,
     FeedbackIn,
     JobIn,
     ParsePreviewIn,
+    PurgeCvIn,
+    RetentionIn,
     StageIn,
     TaxonomyIn,
 )
@@ -87,15 +92,24 @@ def _job_dict(row, *, include_description: bool = True) -> dict:
     return result
 
 
-def _applicant_public(row, *, include_detail: bool = True) -> dict:
+# Parser output that reproduces the whole CV; never returned by the API
+# (manager CV download is the only route to the document itself).
+_PARSED_PRIVATE = ("readable_text", "normalized_text", "line_map", "sections")
+
+
+def _applicant_public(row, *, include_detail: bool = True, job_rubric_version: Optional[int] = None) -> dict:
     result = dict(row)
     result.pop("cv_attachment", None)
     result.pop("cv_text", None)
     for field in _APPLICANT_JSON:
         result[field] = _load_json(result.get(field), [] if field in {"score_breakdown", "gate_failures"} else {})
+    for key in _PARSED_PRIVATE:
+        result["parsed"].pop(key, None)
     if not include_detail:
         result.pop("parsed", None)
         result.pop("corrections", None)
+    if job_rubric_version is not None and "scored_rubric_version" in result:
+        result["score_stale"] = result["scored_rubric_version"] < job_rubric_version
     result["needs_manual_review"] = bool(result.get("needs_manual_review"))
     result["has_cv"] = bool(row["cv_attachment"]) if "cv_attachment" in row.keys() else True
     return result
@@ -117,8 +131,8 @@ def _get_job(job_id: int):
 def _get_applicant_with_job(applicant_id: int):
     with db() as conn:
         row = conn.execute(
-            "SELECT a.*, j.department AS job_department FROM applicants a "
-            "JOIN job_openings j ON j.id = a.job_id WHERE a.id = ?",
+            "SELECT a.*, j.department AS job_department, j.rubric_version AS job_rubric_version "
+            "FROM applicants a JOIN job_openings j ON j.id = a.job_id WHERE a.id = ?",
             (applicant_id,),
         ).fetchone()
     if row is None:
@@ -357,8 +371,6 @@ def get_job(job_id: int, user: CurrentUser = Depends(_hr_or_head)):
 
 @router.put("/jobs/{job_id}")
 def update_job(job_id: int, payload: JobIn, user: CurrentUser = Depends(_hr_staff)):
-    old_row = _get_job(job_id)
-    old = _job_dict(old_row)
     values = payload.model_dump()
     if not values["weights"]:
         values["weights"] = dict(DEFAULT_WEIGHTS)
@@ -367,12 +379,21 @@ def update_job(job_id: int, payload: JobIn, user: CurrentUser = Depends(_hr_staf
         "min_years", "min_education", "gates", "required_skills",
         "preferred_skills", "languages", "weights", "semantic_criteria",
     }
-    changed = any(old[field] != values[field] for field in criteria_fields)
-    rubric_version = old["rubric_version"] + (1 if changed else 0)
-    closed_at = old["closed_at"]
-    if values["status"] != old["status"]:
-        closed_at = _now() if values["status"] == "closed" else None
     with db() as conn:
+        # Read + version + write under the lock every score publisher takes, so two
+        # edits can't both claim the same rubric_version.
+        lock(conn)
+        old_row = conn.execute("SELECT * FROM job_openings WHERE id = ?", (job_id,)).fetchone()
+        if old_row is None:
+            raise HTTPException(404, "Job not found")
+        old = _job_dict(old_row)
+        changed = any(old[field] != values[field] for field in criteria_fields)
+        rubric_version = old["rubric_version"] + (1 if changed else 0)
+        closed_at = old["closed_at"]
+        if values["status"] != old["status"]:
+            closed_at = _now() if values["status"] == "closed" else None
+        if values["status"] == "closed":
+            privacy.start_retention_for_job(conn, job_id)
         row = conn.execute(
             """UPDATE job_openings SET title=?, department=?, location=?, employment_type=?,
                description=?, status=?, min_years=?, min_education=?, gates=?, required_skills=?,
@@ -387,7 +408,8 @@ def update_job(job_id: int, payload: JobIn, user: CurrentUser = Depends(_hr_staf
             ),
         ).fetchone()
         applicants = conn.execute(
-            "SELECT id, cv_text, corrections, nationality, city FROM applicants WHERE job_id = ?",
+            "SELECT id, cv_text, corrections, nationality, city, row_version FROM applicants "
+            "WHERE job_id = ? AND cv_purged_at IS NULL",
             (job_id,),
         ).fetchall() if changed else []
 
@@ -399,16 +421,22 @@ def update_job(job_id: int, payload: JobIn, user: CurrentUser = Depends(_hr_staf
             applicant["cv_text"], _load_json(applicant["corrections"], {}), updated_job,
             {"nationality": applicant["nationality"], "city": applicant["city"]}, taxonomy,
         )
-        rescored.append((*_score_values(result), _now(), applicant["id"]))
+        rescored.append((*_score_values(result), rubric_version, _now(), applicant["id"], applicant["row_version"],
+                         job_id, rubric_version))
+    published = 0
     if rescored:
         with db() as conn:
+            lock(conn)
             for item in rescored:
-                conn.execute(
+                # A concurrent edit, CV removal, deletion or newer rubric wins; that row keeps its old score.
+                published += conn.execute(
                     "UPDATE applicants SET score=?, rules_score=?, final_score=?, score_breakdown=?, "
-                    "gate_failures=?, updated_at=? WHERE id=?",
+                    "gate_failures=?, scored_rubric_version=?, updated_at=?, row_version=row_version+1 "
+                    "WHERE id=? AND row_version=? AND cv_purged_at IS NULL "
+                    "AND (SELECT rubric_version FROM job_openings WHERE id=?) = ?",
                     item,
-                )
-    updated_job["rescored_applicants"] = len(rescored)
+                ).rowcount
+    updated_job["rescored_applicants"] = published
     return updated_job
 
 
@@ -418,6 +446,8 @@ def close_job(job_id: int, _: CurrentUser = Depends(_hr_staff)):
         return {"id": job_id, "status": "closed"}
     now = _now()
     with db() as conn:
+        lock(conn)  # an upload in flight re-checks the status under this same lock
+        privacy.start_retention_for_job(conn, job_id)
         conn.execute("UPDATE job_openings SET status='closed', closed_at=? WHERE id=?", (now, job_id))
     return {"id": job_id, "status": "closed", "closed_at": now}
 
@@ -443,13 +473,14 @@ def list_applicants(
             "cv_name, cv_mime, score, rules_score, final_score, parsed, corrections, "
             "score_breakdown, gate_failures, needs_manual_review, notes, cv_revision, "
             "semantic_status, semantic_reason, external_processing_consent_at, "
-            "consent_notice_version, created_by, created_at, updated_at, "
+            "consent_notice_version, created_by, created_at, updated_at, scored_rubric_version, "
+            "retention_started_at, erase_after, cv_purged_at, cv_purge_reason, "
             "(cv_attachment != '') AS has_cv FROM applicants WHERE " + where + " ORDER BY " + order,
             params,
         ).fetchall()
     result = []
     for row in rows:
-        item = _applicant_public(row, include_detail=False)
+        item = _applicant_public(row, include_detail=False, job_rubric_version=job["rubric_version"])
         item["has_cv"] = bool(row["has_cv"])
         # Two summary columns for the ranked table; HR corrections win over the parser.
         parsed = _load_json(row["parsed"], {})
@@ -462,6 +493,8 @@ def list_applicants(
 
 @router.post("/jobs/{job_id}/applicants", status_code=201)
 def create_applicant(job_id: int, payload: ApplicantIn, user: CurrentUser = Depends(_hr_staff)):
+    if not payload.notice_attested or payload.notice_channel not in privacy.NOTICE_CHANNELS:
+        raise HTTPException(400, "notice_required")
     job_row = _get_job(job_id)
     if job_row["status"] != "open":
         raise HTTPException(409, "job_closed")
@@ -486,6 +519,15 @@ def create_applicant(job_id: int, payload: ApplicantIn, user: CurrentUser = Depe
     try:
         with db() as conn:
             lock(conn)
+            current = conn.execute(
+                "SELECT status, rubric_version FROM job_openings WHERE id=?", (job_id,)
+            ).fetchone()
+            if current is None or current["status"] != "open":
+                raise HTTPException(409, "job_closed")
+            if current["rubric_version"] != job_row["rubric_version"]:
+                raise HTTPException(409, "criteria_changed")
+            # The promise is what the notice said; fall back to today's setting if the client didn't say.
+            promised_days = payload.notice_retention_days or privacy.retention_days(conn)
             row = conn.execute(
                 """INSERT INTO applicants
                    (job_id, full_name, email, phone, nationality, city, source, stage,
@@ -493,9 +535,10 @@ def create_applicant(job_id: int, payload: ApplicantIn, user: CurrentUser = Depe
                     score, rules_score, final_score, score_breakdown, gate_failures,
                     needs_manual_review, notes, cv_revision, semantic_status, semantic_reason,
                     external_processing_consent_at, consent_notice_version, created_by,
-                    created_at, updated_at)
+                    created_at, updated_at, scored_rubric_version, notice_attested_at,
+                    notice_attested_by, notice_channel, processing_notice_version, notice_retention_days)
                    VALUES (?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?,
-                           ?, ?, 1, 'disabled', ?, ?, ?, ?, ?, ?) RETURNING *""",
+                           ?, ?, 1, 'disabled', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *""",
                 (
                     job_id, full_name, email.lower(), phone, payload.nationality, payload.city, payload.source,
                     payload.cv_attachment, payload.cv_name, payload.cv_mime, extracted.text,
@@ -503,16 +546,18 @@ def create_applicant(job_id: int, payload: ApplicantIn, user: CurrentUser = Depe
                     int(extracted.needs_manual_review), payload.notes,
                     "semantic processing is disabled in Phase 2",
                     payload.external_processing_consent_at, payload.consent_notice_version,
-                    user.name, now, now,
+                    user.name, now, now, job_row["rubric_version"],
+                    privacy.utc_str(privacy.utc_now()), user.id, payload.notice_channel, privacy.NOTICE_VERSION,
+                    promised_days,
                 ),
             ).fetchone()
     except IntegrityError:
         raise HTTPException(409, "duplicate_application")
-    return _applicant_public(row)
+    return _applicant_public(row, job_rubric_version=job_row["rubric_version"])
 
 
 @router.get("/jobs/{job_id}/export")
-def export_applicants(job_id: int, _: CurrentUser = Depends(_hr_staff)):
+def export_applicants(job_id: int, _: CurrentUser = Depends(_manager)):
     job = _get_job(job_id)
     with db() as conn:
         rows = conn.execute(
@@ -559,8 +604,9 @@ def get_applicant(applicant_id: int, user: CurrentUser = Depends(_hr_or_head)):
         feedback = conn.execute(
             "SELECT * FROM interview_feedback WHERE applicant_id=? ORDER BY id DESC", (applicant_id,)
         ).fetchall()
-    result = _applicant_public(row)
+    result = _applicant_public(row, job_rubric_version=row["job_rubric_version"])
     result.pop("job_department", None)
+    result.pop("job_rubric_version", None)
     result["history"] = [dict(item) for item in history]
     result["feedback"] = [
         {**dict(item), "ratings": _load_json(item["ratings"], [])} for item in feedback
@@ -572,18 +618,22 @@ def get_applicant(applicant_id: int, user: CurrentUser = Depends(_hr_or_head)):
 def get_cv(applicant_id: int, _: CurrentUser = Depends(_manager)):
     with db() as conn:
         row = conn.execute(
-            "SELECT cv_attachment, cv_name, cv_mime FROM applicants WHERE id=?", (applicant_id,)
+            "SELECT cv_attachment, cv_name, cv_mime, cv_purged_at FROM applicants WHERE id=?", (applicant_id,)
         ).fetchone()
     if row is None:
         raise HTTPException(404, "Applicant not found")
+    if row["cv_purged_at"]:
+        raise HTTPException(410, "cv_removed")
     if not row["cv_attachment"]:
         raise HTTPException(404, "No CV")
-    return {"id": applicant_id, **dict(row)}
+    return {"id": applicant_id, "cv_attachment": row["cv_attachment"], "cv_name": row["cv_name"], "cv_mime": row["cv_mime"]}
 
 
 @router.patch("/applicants/{applicant_id}")
 def patch_applicant(applicant_id: int, payload: ApplicantPatchIn, _: CurrentUser = Depends(_hr_staff)):
     row = _get_applicant_with_job(applicant_id)
+    if row["cv_purged_at"]:
+        raise HTTPException(409, "cv_purged")
     supplied = payload.model_fields_set
     if not supplied:
         raise HTTPException(400, "No changes supplied")
@@ -598,42 +648,117 @@ def patch_applicant(applicant_id: int, payload: ApplicantPatchIn, _: CurrentUser
     )
     values = _score_values(result)
     with db() as conn:
+        lock(conn)
         updated = conn.execute(
             "UPDATE applicants SET notes=?, corrections=?, score=?, rules_score=?, final_score=?, "
-            "score_breakdown=?, gate_failures=?, updated_at=? WHERE id=? RETURNING *",
-            (notes, _json(corrections), *values, _now(), applicant_id),
+            "score_breakdown=?, gate_failures=?, scored_rubric_version=?, updated_at=?, "
+            "row_version=row_version+1 WHERE id=? AND row_version=? AND cv_purged_at IS NULL "
+            "AND (SELECT rubric_version FROM job_openings WHERE id=?) = ? RETURNING *",
+            (notes, _json(corrections), *values, job_row["rubric_version"], _now(), applicant_id, row["row_version"],
+             job_row["id"], job_row["rubric_version"]),
         ).fetchone()
-    return _applicant_public(updated)
+    if updated is None:
+        raise HTTPException(409, "conflict")
+    return _applicant_public(updated, job_rubric_version=job_row["rubric_version"])
 
 
 @router.post("/applicants/{applicant_id}/stage")
-def change_stage(applicant_id: int, payload: StageIn, user: CurrentUser = Depends(_hr_staff)):
+def change_stage(
+    applicant_id: int, payload: StageIn, background: BackgroundTasks, user: CurrentUser = Depends(_hr_staff),
+):
     now = _now()
     with db() as conn:
         lock(conn)
-        row = conn.execute("SELECT stage FROM applicants WHERE id=?", (applicant_id,)).fetchone()
+        row = conn.execute(
+            "SELECT a.stage, a.email, a.full_name, a.cv_purged_at, j.title FROM applicants a "
+            "JOIN job_openings j ON j.id = a.job_id WHERE a.id=?", (applicant_id,)
+        ).fetchone()
         if row is None:
             raise HTTPException(404, "Applicant not found")
         old = row["stage"]
         if payload.stage not in _STAGE_NEXT[old]:
             raise HTTPException(409, "invalid_stage_transition")
-        conn.execute("UPDATE applicants SET stage=?, updated_at=? WHERE id=?", (payload.stage, now, applicant_id))
+        if row["cv_purged_at"] and payload.stage != "rejected":
+            raise HTTPException(409, "cv_purged")
+        if payload.notify:
+            if row["cv_purged_at"]:
+                raise HTTPException(409, "cv_purged")
+            if not privacy.emails_enabled(conn):
+                raise HTTPException(400, "stage_emails_disabled")
+            if payload.stage not in privacy.EMAIL_STAGES:
+                raise HTTPException(400, "no_email_for_stage")
+            if not privacy.valid_recipient(row["email"]):
+                raise HTTPException(400, "invalid_recipient")
+            message = privacy.render_email(conn, payload.stage, payload.notify_language, row["full_name"], row["title"])
+            if payload.preview_hash != privacy.message_hash(message):
+                raise HTTPException(409, "preview_outdated")
+        note = "" if row["cv_purged_at"] else payload.note  # a removed CV's record stays frozen
+        privacy.cancel_pending_emails(conn, applicant_id)  # a newer move supersedes a queued email
+        conn.execute(
+            "UPDATE applicants SET stage=?, updated_at=?, row_version=row_version+1 WHERE id=?",
+            (payload.stage, now, applicant_id),
+        )
+        if payload.stage in privacy.TERMINAL_STAGES:
+            privacy.start_retention_for_applicant(conn, applicant_id)
         history = conn.execute(
             "INSERT INTO applicant_stage_history "
-            "(applicant_id, old_stage, new_stage, note, changed_by, changed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) RETURNING *",
-            (applicant_id, old, payload.stage, payload.note, user.name, now),
+            "(applicant_id, old_stage, new_stage, note, changed_by, changed_at, notify_status, notify_language, "
+            "notify_subject, notify_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *",
+            (applicant_id, old, payload.stage, note, user.name, now,
+             "pending" if payload.notify else "", payload.notify_language if payload.notify else "",
+             message["subject"] if payload.notify else "", message["body"] if payload.notify else ""),
         ).fetchone()
+    if payload.notify:
+        background.add_task(privacy.send_stage_email, history["id"])
     return dict(history)
 
 
-@router.delete("/applicants/{applicant_id}", status_code=204)
-def delete_applicant(applicant_id: int, _: CurrentUser = Depends(_manager)):
+@router.get("/applicants/{applicant_id}/stage-email-preview")
+def stage_email_preview(
+    applicant_id: int,
+    stage: str = Query(..., pattern="^(interview|offer|rejected)$"),
+    lang: str = Query("en", pattern="^(en|ar)$"),
+    _: CurrentUser = Depends(_hr_staff),
+):
+    row = _get_applicant_with_job(applicant_id)
     with db() as conn:
-        found = conn.execute("SELECT 1 FROM applicants WHERE id=?", (applicant_id,)).fetchone()
+        title = conn.execute("SELECT title FROM job_openings WHERE id=?", (row["job_id"],)).fetchone()["title"]
+        message = privacy.render_email(conn, stage, lang, row["full_name"], title)
+        enabled = privacy.emails_enabled(conn)
+    return {"to": row["email"], "valid_recipient": privacy.valid_recipient(row["email"]),
+            "enabled": enabled and email_configured(), "hash": privacy.message_hash(message), **message}
+
+
+@router.post("/applicants/{applicant_id}/purge-cv")
+def purge_applicant_cv(applicant_id: int, payload: PurgeCvIn, user: CurrentUser = Depends(_manager)):
+    with db() as conn:
+        lock(conn)
+        if not privacy.purge_cv(conn, applicant_id, str(user.id), payload.reason):
+            exists = conn.execute("SELECT 1 FROM applicants WHERE id=?", (applicant_id,)).fetchone()
+            raise HTTPException(409 if exists else 404, "already_removed" if exists else "Applicant not found")
+    return {"id": applicant_id, "cv_removed": True}
+
+
+@router.delete("/applicants/{applicant_id}", status_code=204)
+def delete_applicant(
+    applicant_id: int,
+    reason: str = Query("manual", pattern="^(manual|erasure_request)$"),
+    all_for_email: bool = False,
+    user: CurrentUser = Depends(_manager),
+):
+    with db() as conn:
+        lock(conn)
+        found = conn.execute("SELECT id, job_id, email FROM applicants WHERE id=?", (applicant_id,)).fetchone()
         if found is None:
             raise HTTPException(404, "Applicant not found")
-        conn.execute("DELETE FROM applicants WHERE id=?", (applicant_id,))
+        targets = [found]
+        if all_for_email and found["email"]:
+            targets = conn.execute(
+                "SELECT id, job_id, email FROM applicants WHERE email=?", (found["email"],)
+            ).fetchall()
+        for target in targets:
+            conn.execute("DELETE FROM applicants WHERE id=?", (target["id"],))
+            privacy.log_event(conn, "deleted", target["id"], target["job_id"], str(user.id), reason)
 
 
 @router.get("/applicants/{applicant_id}/feedback")
@@ -654,6 +779,12 @@ def create_feedback(applicant_id: int, payload: FeedbackIn, user: CurrentUser = 
     ratings = [item.model_dump() for item in payload.ratings]
     average = round(sum(item["score_1_5"] for item in ratings) / len(ratings), 2) if ratings else 0.0
     with db() as conn:
+        lock(conn)  # CV removal / deletion can't slip in between the check and the insert
+        current = conn.execute("SELECT cv_purged_at FROM applicants WHERE id=?", (applicant_id,)).fetchone()
+        if current is None:
+            raise HTTPException(404, "Applicant not found")
+        if current["cv_purged_at"]:
+            raise HTTPException(409, "cv_purged")
         row = conn.execute(
             "INSERT INTO interview_feedback "
             "(applicant_id, interviewer, result, ratings, avg_rating, comment, created_at) "
@@ -691,11 +822,71 @@ def upsert_taxonomy(payload: TaxonomyIn, _: CurrentUser = Depends(_manager)):
 
 @router.post("/parse-preview")
 def parse_preview(payload: ParsePreviewIn, _: CurrentUser = Depends(_hr_staff)):
+    if not payload.notice_attested:
+        raise HTTPException(400, "notice_required")
     try:
         extracted = extract_text(base64.b64decode(payload.cv_attachment, validate=True), payload.cv_name)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return {"extraction": extracted.to_dict(), "parsed": _parse_with_taxonomy(extracted.text).to_dict()}
+    parsed = _parse_with_taxonomy(extracted.text).to_dict()
+    for key in _PARSED_PRIVATE:
+        parsed.pop(key, None)
+    extraction = {"pages": extracted.pages, "needs_manual_review": extracted.needs_manual_review,
+                  "warnings": extracted.warnings}
+    return {"extraction": extraction, "parsed": parsed}
+
+
+@router.get("/policy")
+def recruitment_policy(_: CurrentUser = Depends(_hr_or_head)):
+    """What the UI needs to show the notice, retention and email options."""
+    with db() as conn:
+        days = privacy.retention_days(conn)
+        enabled = privacy.emails_enabled(conn)
+    return {
+        "notice_version": privacy.NOTICE_VERSION, "notice_channels": list(privacy.NOTICE_CHANNELS),
+        "retention_days": days, "stage_emails_enabled": enabled and email_configured(),
+        "email_stages": list(privacy.EMAIL_STAGES),
+    }
+
+
+@router.get("/retention")
+def get_retention(_: CurrentUser = Depends(_manager)):
+    now = privacy.utc_str(privacy.utc_now())
+    with db() as conn:
+        due = conn.execute(
+            "SELECT COUNT(*) FROM applicants WHERE erase_after IS NOT NULL AND erase_after <= ?", (now,)
+        ).fetchone()[0]
+        return {"days": privacy.retention_days(conn), "min_days": privacy.MIN_DAYS, "max_days": privacy.MAX_DAYS,
+                "due_now": due, "last_run": privacy.last_run(conn)}
+
+
+@router.put("/retention")
+def put_retention(payload: RetentionIn, _: CurrentUser = Depends(_manager)):
+    try:
+        privacy.set_retention_days(payload.days)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return get_retention(_)
+
+
+@router.post("/retention/run")
+def run_retention(dry_run: bool = True, user: CurrentUser = Depends(_manager)):
+    return privacy.sweep(dry_run=dry_run, actor=str(user.id))
+
+
+@router.get("/email-settings")
+def get_email_settings(_: CurrentUser = Depends(_manager)):
+    with db() as conn:
+        return {"enabled": privacy.emails_enabled(conn), "templates": privacy.email_templates(conn),
+                "email_configured": email_configured(), "stages": list(privacy.EMAIL_STAGES)}
+
+
+@router.put("/email-settings")
+def put_email_settings(payload: EmailSettingsIn, _: CurrentUser = Depends(_manager)):
+    try:
+        return privacy.save_email_settings(payload.enabled, payload.templates)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.get("/stats")

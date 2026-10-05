@@ -358,6 +358,18 @@ _SCHEMA = """
                 created_at   TEXT    NOT NULL
             );
 
+            -- Retention / erasure / CV-removal audit. Ids and reason codes only, no
+            -- personal data, and no FK so the trail outlives the deleted applicant.
+            CREATE TABLE IF NOT EXISTS ats_privacy_events (
+                id            {PK},
+                action        TEXT    NOT NULL,
+                applicant_id  INTEGER,
+                job_id        INTEGER,
+                actor         TEXT    NOT NULL DEFAULT '',
+                reason        TEXT    NOT NULL DEFAULT '',
+                created_at    TEXT    NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS skills_taxonomy (
                 id         TEXT    PRIMARY KEY,
                 canonical  TEXT    NOT NULL,
@@ -437,6 +449,33 @@ _ADDED_COLUMNS = (
     # Reassigning a document to another owner is auditable (see routers/documents.py).
     ("document_history", "old_owner", "TEXT NOT NULL DEFAULT ''"),
     ("document_history", "new_owner", "TEXT NOT NULL DEFAULT ''"),
+    # ATS Phase 4: retention clock (UTC, set once), early CV removal, write
+    # versioning, notice attestation, and candidate stage-email status.
+    ("applicants", "retention_started_at", "TEXT"),
+    ("applicants", "erase_after", "TEXT"),
+    ("applicants", "retention_days_snapshot", "INTEGER"),
+    ("applicants", "cv_purged_at", "TEXT"),
+    ("applicants", "cv_purge_reason", "TEXT NOT NULL DEFAULT ''"),
+    ("applicants", "row_version", "INTEGER NOT NULL DEFAULT 1"),
+    ("applicants", "scored_rubric_version", "INTEGER NOT NULL DEFAULT 1"),
+    ("applicants", "notice_attested_at", "TEXT"),
+    ("applicants", "notice_attested_by", "INTEGER"),
+    ("applicants", "notice_channel", "TEXT NOT NULL DEFAULT ''"),
+    ("applicants", "processing_notice_version", "TEXT NOT NULL DEFAULT ''"),
+    ("applicant_stage_history", "notify_status", "TEXT NOT NULL DEFAULT ''"),
+    ("applicant_stage_history", "notify_language", "TEXT NOT NULL DEFAULT ''"),
+    ("applicant_stage_history", "notified_at", "TEXT"),
+    # Retention promised in the notice HR attested to; the clock never exceeds it.
+    ("applicants", "notice_retention_days", "INTEGER"),
+    # The exact message HR previewed and approved; the worker sends this, not a re-render.
+    ("applicant_stage_history", "notify_subject", "TEXT NOT NULL DEFAULT ''"),
+    ("applicant_stage_history", "notify_body", "TEXT NOT NULL DEFAULT ''"),
+)
+
+# Indexes on columns that arrive through _ADDED_COLUMNS, so they can only be
+# created after those columns exist on an older database.
+_POST_COLUMN_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_applicants_erase_after ON applicants (erase_after)",
 )
 
 
@@ -463,7 +502,10 @@ def _add_missing_columns(conn) -> None:
     ``information_schema`` are universal SQL, so this can't fail on an older
     server than the one it was written against. A boot must never die here."""
     for table, column, decl in _ADDED_COLUMNS:
-        if column not in _existing_columns(conn, table):
+        existing = _existing_columns(conn, table)
+        # No columns at all = the table doesn't exist here (a partial/legacy
+        # database); the schema DDL creates it, so there is nothing to patch.
+        if existing and column not in existing:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
@@ -477,6 +519,8 @@ def init_db() -> None:
                 if stmt:
                     conn.execute(stmt)
             _add_missing_columns(conn)
+            for stmt in _POST_COLUMN_DDL:
+                conn.execute(stmt)
             _seed_skills_taxonomy(conn, "%s")
             conn.commit()
         finally:
@@ -491,6 +535,8 @@ def init_db() -> None:
         raw.execute("PRAGMA journal_mode=WAL")
         raw.executescript(ddl)
         _add_missing_columns(raw)
+        for stmt in _POST_COLUMN_DDL:
+            raw.execute(stmt)
         _seed_skills_taxonomy(raw, "?")
         raw.commit()
     finally:

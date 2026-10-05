@@ -325,6 +325,11 @@ class ApplicantIn(BaseModel):
     notes: str = Field("", max_length=5000)
     external_processing_consent_at: Optional[str] = Field(None, max_length=40)
     consent_notice_version: str = Field("", max_length=80)
+    # HR attests the candidate was given the recruitment privacy notice, and how.
+    notice_attested: bool = False
+    notice_channel: str = Field("", max_length=20)
+    # Retention days stated in the notice HR actually sent (from GET /recruitment/policy).
+    notice_retention_days: Optional[int] = Field(None, ge=1, le=365)
 
     @field_validator("full_name", "email", "phone", "nationality", "city", "source", "cv_name")
     @classmethod
@@ -375,6 +380,23 @@ class ApplicantPatchIn(BaseModel):
 class StageIn(BaseModel):
     stage: str = Field(..., pattern="^(new|screened|shortlisted|interview|offer|hired|rejected)$")
     note: str = Field("", max_length=2000)
+    notify: bool = False
+    notify_language: str = Field("en", pattern="^(en|ar)$")
+    # sha256 of the previewed subject+body; the move is refused if the message changed since.
+    preview_hash: str = Field("", max_length=64)
+
+
+class PurgeCvIn(BaseModel):
+    reason: str = Field(..., pattern="^(withdrawn|manual)$")
+
+
+class RetentionIn(BaseModel):
+    days: int = Field(..., ge=1, le=365)
+
+
+class EmailSettingsIn(BaseModel):
+    enabled: bool
+    templates: dict[str, Any] = Field(default_factory=dict)
 
 
 class FeedbackRatingIn(BaseModel):
@@ -409,6 +431,7 @@ class TaxonomyIn(BaseModel):
 
 
 class ParsePreviewIn(BaseModel):
+    notice_attested: bool = False
     cv_attachment: str = Field(..., min_length=1, max_length=MAX_PROOF_B64_CHARS)
     cv_name: str = Field(..., min_length=1, max_length=200)
     cv_mime: str = Field(..., min_length=1, max_length=100)
