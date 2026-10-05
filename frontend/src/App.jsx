@@ -17,17 +17,19 @@ import Employees from "./pages/Employees";
 import Reports from "./pages/Reports";
 import Users from "./pages/Users";
 import Settings from "./pages/Settings";
+import Jobs from "./pages/Jobs";
+import Applicants from "./pages/Applicants";
 import Login from "./pages/Login";
 
 // Pages each role may open; the first entry is the role's landing page.
 const ROLE_PAGES = {
-  hr_manager: ["dash", "perm", "log", "emp", "edocs", "cdocs", "rep", "users", "set"],
-  hr_officer: ["dash", "perm", "log", "emp", "edocs", "cdocs", "rep"],
-  dept_head: ["rep", "emp"],
+  hr_manager: ["dash", "perm", "log", "emp", "edocs", "cdocs", "jobs", "cands", "rep", "users", "set"],
+  hr_officer: ["dash", "perm", "log", "emp", "edocs", "cdocs", "jobs", "cands", "rep"],
+  dept_head: ["rep", "emp", "jobs", "cands"],
   employee: ["rep"],
 };
 
-const NAV_ICONS = { dash: IC.dash, perm: IC.perm, log: IC.log, emp: IC.emp, edocs: IC.idcard, cdocs: IC.building, rep: IC.rep, users: IC.emp, set: IC.set };
+const NAV_ICONS = { dash: IC.dash, perm: IC.perm, log: IC.log, emp: IC.emp, edocs: IC.idcard, cdocs: IC.building, jobs: IC.jobs, cands: IC.cands, rep: IC.rep, users: IC.emp, set: IC.set };
 
 // Single-key shortcuts (suppressed while typing in a field).
 const HOTKEY_PAGES = { d: "dash", n: "log", e: "emp", r: "rep" };
@@ -40,6 +42,8 @@ export default function HRSystem() {
   const [lang, setLang] = useLocalStorage("hr_lang", "en");
   const [dark, setDark] = useLocalStorage("hr_theme_dark", false);
   const [page, setPage] = useState("dash");
+  // Job picked on the Job Openings page, carried into the Applicants page.
+  const [candJob, setCandJob] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -133,6 +137,8 @@ export default function HRSystem() {
     cdocs: <CompanyDocs lang={lang} user={user} onChanged={refreshAlerts} />,
     log: <LogViolation lang={lang} user={user} />,
     emp: <Employees lang={lang} user={user} onGoPerm={allowed.includes("perm") ? () => nav("perm") : undefined} />,
+    jobs: <Jobs lang={lang} user={user} onOpenApplicants={(id) => { setCandJob(id); nav("cands"); }} />,
+    cands: <Applicants lang={lang} user={user} initialJob={candJob} />,
     rep: <Reports lang={lang} user={user} />,
     users: <Users lang={lang} user={user} />,
     set: <Settings lang={lang} user={user} dark={dark} onToggleDark={toggleDark} onToggleLang={toggleLang} />,

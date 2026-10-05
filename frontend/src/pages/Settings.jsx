@@ -6,6 +6,7 @@ import { L } from "../i18n";
 import { IC } from "../icons";
 import { Card, BtnPri, BtnSec, inp } from "../components";
 import { useToast } from "../toast";
+import TaxonomyEditor from "./Taxonomy";
 
 const ROLE_LABEL_KEY = { hr_manager: "roleManager", hr_officer: "roleOfficer", dept_head: "roleDeptHead", employee: "roleEmployee" };
 
@@ -253,6 +254,13 @@ export default function Settings({ lang, user, dark, onToggleDark, onToggleLang 
           <div style={{ marginTop: 16 }}>
             <BtnPri onClick={saveThr} disabled={thrSaving}>{IC.check} <span>{thrSaving ? "…" : t("save")}</span></BtnPri>
           </div>
+        </Section>
+      )}
+
+      {/* Recruitment skills taxonomy — managers only */}
+      {isManager && (
+        <Section icon={IC.cands} title={t("taxTitle")} sub={t("taxSub")}>
+          <TaxonomyEditor lang={lang} />
         </Section>
       )}
     </div>

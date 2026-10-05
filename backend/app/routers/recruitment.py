@@ -1,5 +1,6 @@
 """Recruitment API backed by the deterministic, local ATS engine."""
 import base64
+import io
 import json
 import re
 from dataclasses import replace
@@ -7,10 +8,12 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 
 from ..ats import extract_text, normalize, parse_cv, score
 from ..ats.parse import EDUCATION_ORDINAL, Evidence, SkillMatch
-from ..ats.role_templates import DEFAULT_WEIGHTS
+from ..ats.role_templates import DEFAULT_WEIGHTS, ROLE_TEMPLATES
 from ..ats.taxonomy import SKILLS_BY_ID
 from ..auth import (
     ROLE_DEPT_HEAD,
@@ -62,6 +65,13 @@ def _load_json(value: Any, fallback: Any) -> Any:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return fallback
+
+
+def _xlsx_safe(value):
+    """Neutralise Excel formula injection: CV-derived text is attacker-controlled."""
+    if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
 
 
 def _json(value: Any) -> str:
@@ -284,6 +294,14 @@ def _score_values(result) -> tuple:
     )
 
 
+@router.get("/templates")
+def list_templates(_: CurrentUser = Depends(_hr_staff)):
+    """Starter role templates the "New job" form pre-fills from."""
+    keys = ("id", "title", "required_skills", "preferred_skills", "min_years",
+            "min_education", "languages", "gates", "weights")
+    return [{key: template[key] for key in keys} for template in ROLE_TEMPLATES]
+
+
 @router.get("/jobs")
 def list_jobs(user: CurrentUser = Depends(_hr_or_head)):
     sql = (
@@ -422,7 +440,7 @@ def list_applicants(
     with db() as conn:
         rows = conn.execute(
             "SELECT id, job_id, full_name, email, phone, nationality, city, source, stage, "
-            "cv_name, cv_mime, score, rules_score, final_score, "
+            "cv_name, cv_mime, score, rules_score, final_score, parsed, corrections, "
             "score_breakdown, gate_failures, needs_manual_review, notes, cv_revision, "
             "semantic_status, semantic_reason, external_processing_consent_at, "
             "consent_notice_version, created_by, created_at, updated_at, "
@@ -433,6 +451,11 @@ def list_applicants(
     for row in rows:
         item = _applicant_public(row, include_detail=False)
         item["has_cv"] = bool(row["has_cv"])
+        # Two summary columns for the ranked table; HR corrections win over the parser.
+        parsed = _load_json(row["parsed"], {})
+        corrections = _load_json(row["corrections"], {})
+        for key in ("years_experience", "education"):
+            item[key] = corrections[key] if key in corrections else parsed.get(key)
         result.append(item)
     return result
 
@@ -486,6 +509,43 @@ def create_applicant(job_id: int, payload: ApplicantIn, user: CurrentUser = Depe
     except IntegrityError:
         raise HTTPException(409, "duplicate_application")
     return _applicant_public(row)
+
+
+@router.get("/jobs/{job_id}/export")
+def export_applicants(job_id: int, _: CurrentUser = Depends(_hr_staff)):
+    job = _get_job(job_id)
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT id, full_name, email, phone, nationality, city, source, stage, score, "
+            "parsed, gate_failures, needs_manual_review, created_at FROM applicants "
+            "WHERE job_id = ? ORDER BY score DESC, id ASC",
+            (job_id,),
+        ).fetchall()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Applicants"
+    ws.append([
+        "Rank", "ID", "Name", "Email", "Phone", "Nationality", "City", "Source", "Stage",
+        "Score", "Years", "Education", "Gate failures", "Needs review", "Created At",
+    ])
+    for rank, r in enumerate(rows, start=1):
+        parsed = _load_json(r["parsed"], {})
+        ws.append([
+            rank, r["id"], _xlsx_safe(r["full_name"]), _xlsx_safe(r["email"]), _xlsx_safe(r["phone"]),
+            _xlsx_safe(r["nationality"]), _xlsx_safe(r["city"]), _xlsx_safe(r["source"]), r["stage"],
+            r["score"], parsed.get("years_experience"), parsed.get("education"),
+            ", ".join(_load_json(r["gate_failures"], [])), "yes" if r["needs_manual_review"] else "",
+            r["created_at"],
+        ])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"applicants_job{job['id']}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/applicants/{applicant_id}")

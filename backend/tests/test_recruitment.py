@@ -152,6 +152,8 @@ def test_upload_score_round_trip_and_no_cv_leak(admin):
     assert len(listed) == 1
     assert "cv_attachment" not in listed[0] and "cv_text" not in listed[0]
     assert "parsed" not in listed[0] and "corrections" not in listed[0]
+    assert listed[0]["education"] == applicant["parsed"]["education"]
+    assert listed[0]["years_experience"] == applicant["parsed"]["years_experience"]
     detail = admin.get(f"/api/recruitment/applicants/{applicant['id']}").json()
     assert "cv_attachment" not in detail and "cv_text" not in detail
 
@@ -293,3 +295,31 @@ def test_parse_preview_does_not_persist_and_stats(admin):
     job_stats = next(item for item in stats["jobs"] if item["job_id"] == job["id"])
     assert job_stats["applicant_count"] == 1
     assert job_stats["avg_score"] == applicant["score"]
+
+
+def test_templates_list_for_hr_staff_only(admin, new_employee):
+    response = admin.get("/api/recruitment/templates")
+    assert response.status_code == 200
+    templates = response.json()
+    assert len(templates) == 6
+    assert {"id", "title", "required_skills", "weights"} <= set(templates[0])
+    head, _ = new_employee(role="dept_head", department="Sales")
+    assert head.get("/api/recruitment/templates").status_code == 403
+
+
+def test_export_ranks_applicants_and_neutralises_formulas(admin, new_employee):
+    from io import BytesIO
+    from openpyxl import load_workbook
+
+    job, _ = _create_job(admin)
+    assert _upload(admin, job["id"], full_name="=HYPERLINK(\"x\")").status_code == 201
+    assert _upload(admin, job["id"], skills="Excel").status_code == 201
+    response = admin.get(f"/api/recruitment/jobs/{job['id']}/export")
+    assert response.status_code == 200
+    rows = list(load_workbook(BytesIO(response.content)).active.iter_rows(values_only=True))
+    assert rows[0][:3] == ("Rank", "ID", "Name")
+    assert [row[0] for row in rows[1:]] == [1, 2]
+    assert rows[1][9] >= rows[2][9]
+    assert all(not str(row[2] or "").startswith("=") for row in rows[1:])
+    head, _ = new_employee(role="dept_head", department="Ops")
+    assert head.get(f"/api/recruitment/jobs/{job['id']}/export").status_code == 403

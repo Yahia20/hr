@@ -98,6 +98,31 @@ export const api = {
 
   getThresholds: () => req("/settings/thresholds"),
   setThresholds: (thresholds) => req("/settings/thresholds", { method: "POST", body: JSON.stringify({ thresholds }) }),
+
+  // Recruitment (ATS)
+  jobTemplates: () => req("/recruitment/templates"),
+  listJobs: () => req("/recruitment/jobs"),
+  getJob: (id) => req(`/recruitment/jobs/${id}`),
+  createJob: (data) => req("/recruitment/jobs", { method: "POST", body: JSON.stringify(data) }),
+  updateJob: (id, data) => req(`/recruitment/jobs/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  listApplicants: (jobId, filters = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    ).toString();
+    return req(`/recruitment/jobs/${jobId}/applicants${qs ? `?${qs}` : ""}`);
+  },
+  uploadApplicant: (jobId, data) => req(`/recruitment/jobs/${jobId}/applicants`, { method: "POST", body: JSON.stringify(data) }),
+  getApplicant: (id) => req(`/recruitment/applicants/${id}`),
+  patchApplicant: (id, data) => req(`/recruitment/applicants/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteApplicant: (id) => req(`/recruitment/applicants/${id}`, { method: "DELETE" }),
+  applicantCv: (id) => req(`/recruitment/applicants/${id}/cv`),
+  moveStage: (id, stage, note = "") => req(`/recruitment/applicants/${id}/stage`, { method: "POST", body: JSON.stringify({ stage, note }) }),
+  addFeedback: (id, data) => req(`/recruitment/applicants/${id}/feedback`, { method: "POST", body: JSON.stringify(data) }),
+  listTaxonomy: () => req("/recruitment/taxonomy"),
+  saveTaxonomy: (data) => req("/recruitment/taxonomy", { method: "POST", body: JSON.stringify(data) }),
+  parsePreview: (data) => req("/recruitment/parse-preview", { method: "POST", body: JSON.stringify(data) }),
+  recruitmentStats: () => req("/recruitment/stats"),
+  exportApplicants: (jobId) => downloadXlsx(`/recruitment/jobs/${jobId}/export`, {}, `applicants_job${jobId}`),
 };
 
 async function downloadXlsx(path, filters, prefix) {

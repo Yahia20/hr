@@ -3,7 +3,7 @@ import PropTypes from "prop-types";
 import { S } from "./tokens";
 import { BtnSec } from "./components";
 
-export function Modal({ open, onClose, title, children, labelledBy = "hr-modal-title" }) {
+export function Modal({ open, onClose, title, children, labelledBy = "hr-modal-title", width = 420 }) {
   const boxRef = useRef(null);
   const restoreRef = useRef(null);
 
@@ -54,7 +54,7 @@ export function Modal({ open, onClose, title, children, labelledBy = "hr-modal-t
         aria-modal="true"
         aria-labelledby={labelledBy}
         tabIndex={-1}
-        style={{ width: "100%", maxWidth: 420, background: S.w, borderRadius: S.r3, border: `1px solid ${S.g200}`, boxShadow: S.sh2, padding: 24, animation: "hr-pop-in .18s cubic-bezier(.4,0,.2,1)", outline: "none" }}
+        style={{ width: "100%", maxWidth: width, maxHeight: "calc(100vh - 40px)", overflowY: "auto", background: S.w, borderRadius: S.r3, border: `1px solid ${S.g200}`, boxShadow: S.sh2, padding: 24, animation: "hr-pop-in .18s cubic-bezier(.4,0,.2,1)", outline: "none" }}
       >
         <h3 id={labelledBy} style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 700, color: S.g800 }}>{title}</h3>
         {children}
@@ -88,6 +88,7 @@ Modal.propTypes = {
   title: PropTypes.string,
   children: PropTypes.node,
   labelledBy: PropTypes.string,
+  width: PropTypes.number,
 };
 ConfirmModal.propTypes = {
   open: PropTypes.bool.isRequired,

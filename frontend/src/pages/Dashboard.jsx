@@ -13,11 +13,14 @@ export default function Dashboard({ lang, user, onNewV, onViewAll, docAlerts, on
   const t = (k) => L[lang][k] || k;
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
+  const [rec, setRec] = useState(null);
   const toast = useToast();
   const loading = !data && !err;
 
   useEffect(() => {
     api.dashboard().then(setData).catch((e) => setErr(e.message));
+    // Recruitment tile; the page still renders if the ATS endpoints are unavailable.
+    api.recruitmentStats().then(setRec).catch(() => {});
   }, []);
 
   const totals = data?.totals || { violations: 0, employees: 0, deduction_days: 0, active_freezes: 0 };
@@ -51,6 +54,7 @@ export default function Dashboard({ lang, user, onNewV, onViewAll, docAlerts, on
             <KpiCard icon={IC.users} iconBg="rgba(47,184,158,.1)" value={totals.employees} label={t("totE")} />
             <KpiCard icon={IC.clock} iconBg="rgba(217,119,6,.1)" value={totals.deduction_days} label={t("totD")} />
             <KpiCard icon={IC.shieldR} iconBg="rgba(220,38,38,.1)" value={totals.active_freezes} label={t("actF")} />
+            {rec && <KpiCard icon={IC.jobs} iconBg="rgba(37,99,235,.1)" value={rec.open_jobs} label={t("openJobs")} sub={`${t("totalApplicants")}: ${rec.total_applicants}`} />}
           </>
         )}
       </div>
