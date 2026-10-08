@@ -281,6 +281,7 @@ Unique: `applicants(job_id, email)` where email <> '' (duplicate application gua
 |---|---|---|
 | GET/POST `/jobs` | hr_staff; dept_head sees own dept | list excludes description body |
 | GET/PUT `/jobs/{id}` · POST `/jobs/{id}/close` | hr_staff | PUT of criteria → `rescore=true` re-runs all applicants |
+| POST `/jobs/{id}/rescore` | hr_staff | re-runs all applicants with the current taxonomy, same rubric version (done 2026-10-08) |
 | GET `/jobs/{id}/applicants?stage=&sort=score` | hr_staff, dept_head (own dept) | ranked, no CV bytes |
 | POST `/jobs/{id}/applicants` | hr_staff | JSON body with base64 CV (same shape as permission attachments, limit 5 MB) → extract, parse, score synchronously |
 | GET `/applicants/{id}` | hr_staff, dept_head | parsed + breakdown + history + feedback |
