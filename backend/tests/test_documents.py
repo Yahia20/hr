@@ -4,6 +4,9 @@ slot uniqueness for employee & rent records, attachment access (HR-manager
 only), and role guards."""
 from datetime import date, timedelta
 
+import pytest
+
+from app import db as appdb
 from conftest import csrf
 
 # base64("hello") — content doesn't matter, only that it's valid base64.
@@ -306,6 +309,7 @@ def test_reassign_and_renew_in_one_edit(admin):
     assert entry["old_end"] == _in(30) and entry["new_end"] == _in(365)
 
 
+@pytest.mark.skipif(appdb.USING_PG, reason="drives a raw sqlite3 connection; Postgres upgrades are exercised by init_db")
 def test_added_columns_reach_a_preexisting_table(tmp_path):
     """`CREATE TABLE IF NOT EXISTS` skips a table that already exists, so the
     audit columns must be patched in explicitly or a live database never gets
