@@ -225,3 +225,20 @@ Experience
 Coordinated airline ticketing operations and ticket issuance for walk-in clients
 """)
     assert "ticketing_operations" in {skill.id for skill in parsed.skills}
+
+
+def test_supplied_taxonomy_replaces_the_seed():
+    text = "Riley Example\nSkills\nAmadeus, PNR\nإصدار التذاكر وحجوزات الطيران\n"
+    seeded = {skill.id for skill in parse_cv(text).skills}
+    assert {"amadeus", "pnr"} <= seeded
+
+    taxonomy = [
+        # HR removed the "amadeus" aliases: the seed must not bring them back.
+        {"id": "amadeus", "canonical": "Amadeus GDS", "category": "gds_ticketing", "aliases": ["1a altea"]},
+        # A new HR skill, matched with the same Arabic-prefix rule as the seed.
+        {"id": "ticket_desk", "canonical": "Ticket desk", "category": "custom", "aliases": ["حجوزات الطيران"]},
+    ]
+    parsed = parse_cv(text, taxonomy=taxonomy)
+    found = {skill.id: skill for skill in parsed.skills}
+    assert set(found) == {"ticket_desk"}  # pnr is absent from this taxonomy, so it is not matched
+    assert found["ticket_desk"].evidence[0].line == "إصدار التذاكر وحجوزات الطيران"

@@ -2,7 +2,6 @@
 import base64
 import io
 import json
-import re
 from dataclasses import replace
 from datetime import datetime
 from typing import Any, Optional
@@ -11,7 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 
-from ..ats import extract_text, normalize, parse_cv, score
+from ..ats import extract_text, parse_cv, score
 from ..ats.parse import EDUCATION_ORDINAL, Evidence, SkillMatch
 from ..ats.role_templates import DEFAULT_WEIGHTS, ROLE_TEMPLATES
 from ..ats.taxonomy import SKILLS_BY_ID
@@ -165,38 +164,9 @@ def _taxonomy_snapshot() -> list[dict]:
 
 
 def _parse_with_taxonomy(cv_text: str, taxonomy: Optional[list[dict]] = None):
-    """Run the engine parser, then apply the editable DB taxonomy.
-
-    The engine owns normalization and extraction of every other field. This
-    small overlay makes taxonomy additions/edits effective for future parses
-    without mutating the committed Phase 1 engine.
-    """
-    parsed = parse_cv(cv_text)
+    """Parse with the editable DB taxonomy (the seed is only the starting copy)."""
     taxonomy = taxonomy if taxonomy is not None else _taxonomy_snapshot()
-    existing = {item.id: item for item in parsed.skills}
-    readable_lines = parsed.readable_text.splitlines()
-    normalized_lines = [normalize(line) for line in readable_lines]
-    skills = []
-    for item in taxonomy:
-        match = existing.get(item["id"])
-        evidence = list(match.evidence) if match else []
-        if not evidence:
-            aliases = sorted(
-                {str(value).strip() for value in [item["canonical"], *item["aliases"]] if str(value).strip()},
-                key=len,
-                reverse=True,
-            )
-            normalized_aliases = [(alias, normalize(alias)) for alias in aliases]
-            for line_number, normalized_line in enumerate(normalized_lines):
-                for alias, normalized_alias in normalized_aliases:
-                    if normalized_alias and re.search(
-                        rf"(?<!\w){re.escape(normalized_alias)}(?!\w)", normalized_line
-                    ):
-                        evidence.append(Evidence(alias, readable_lines[line_number], line_number))
-                        break
-        if evidence:
-            skills.append(SkillMatch(item["id"], item["canonical"], item["category"], evidence))
-    return replace(parsed, skills=skills)
+    return parse_cv(cv_text, taxonomy=taxonomy)
 
 
 def _corrected_parsed(

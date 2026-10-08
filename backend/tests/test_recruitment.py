@@ -276,6 +276,22 @@ def test_taxonomy_seed_and_manager_edit(admin, new_employee):
     assert officer.post("/api/recruitment/taxonomy", json=custom, headers=csrf(officer)).status_code == 403
 
 
+def test_removed_alias_on_a_seeded_skill_stops_matching(admin):
+    seeded = next(item for item in admin.get("/api/recruitment/taxonomy").json() if item["id"] == "bsp")
+    job, _ = _create_job(admin, required_skills=["bsp"], preferred_skills=[])
+
+    def required_score():
+        applicant = _upload(admin, job["id"], skills="BSP reporting").json()
+        return next(i for i in applicant["score_breakdown"] if i["criterion"] == "required_skills")["score_0_4"]
+
+    assert required_score() == 4
+    edited = {**seeded, "canonical": "Billing settlement", "aliases": ["billing and settlement plan"]}
+    try:
+        assert admin.post("/api/recruitment/taxonomy", json=edited, headers=csrf(admin)).status_code == 200
+        assert required_score() == 0  # the seed's "bsp" alias must not come back
+    finally:
+        admin.post("/api/recruitment/taxonomy", json=seeded, headers=csrf(admin))
+
 def test_parse_preview_does_not_persist_and_stats(admin):
     job, _ = _create_job(admin)
     before = admin.get("/api/recruitment/stats").json()["total_applicants"]

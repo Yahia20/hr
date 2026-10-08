@@ -164,7 +164,7 @@ def _one_edit_or_transposition(left: str, right: str) -> bool:
     return False
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=512)
 def _skill_pattern(aliases: tuple[str, ...]) -> re.Pattern:
     alternatives = []
     for alias in aliases:
@@ -491,8 +491,22 @@ def _label_value(lines: list[str], labels: str) -> Optional[str]:
     return None
 
 
-def parse_cv(text: str, reference_date: Optional[date] = None) -> ParsedCV:
-    """Parse a CV without I/O, network calls, or probabilistic models."""
+def _skill_aliases(skill: dict) -> tuple[str, ...]:
+    values = {str(value).strip() for value in [skill.get("canonical", ""), *skill.get("aliases", [])]}
+    return tuple(sorted((value for value in values if value), key=len, reverse=True))
+
+
+def parse_cv(
+    text: str,
+    reference_date: Optional[date] = None,
+    taxonomy: Optional[list[dict]] = None,
+) -> ParsedCV:
+    """Parse a CV without I/O, network calls, or probabilistic models.
+
+    ``taxonomy`` is the list of skills to look for (id, canonical, category,
+    aliases).  The app passes the editable database copy so HR edits, including
+    removed aliases and deactivated skills, take effect; the seed is the default.
+    """
     reference_date = reference_date or date.today()
     prepared = prepare_text(text)
     lines = prepared.matching_lines
@@ -531,8 +545,10 @@ def parse_cv(text: str, reference_date: Optional[date] = None) -> ParsedCV:
             language_evidence[language] = found
 
     skill_matches: list[SkillMatch] = []
-    for skill in SKILLS:
-        aliases = tuple(sorted(skill["aliases"], key=len, reverse=True))
+    for skill in SKILLS if taxonomy is None else taxonomy:
+        aliases = _skill_aliases(skill)
+        if not aliases:
+            continue
         found: list[Evidence] = []
         for index, line in enumerate(lines):
             alias = _skill_alias_on_line(line, aliases, fuzzy=skill["id"] == "amadeus")
