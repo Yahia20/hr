@@ -378,21 +378,30 @@ def update_job(job_id: int, payload: JobIn, user: CurrentUser = Depends(_hr_staf
             ),
         ).fetchone()
         applicants = conn.execute(
-            "SELECT id, cv_text, corrections, nationality, city, row_version FROM applicants "
-            "WHERE job_id = ? AND cv_purged_at IS NULL",
+            f"SELECT {_RESCORE_COLUMNS} FROM applicants WHERE job_id = ? AND cv_purged_at IS NULL",
             (job_id,),
         ).fetchall() if changed else []
 
     updated_job = _job_dict(row)
+    updated_job["rescored_applicants"] = _rescore_applicants(updated_job, applicants)
+    return updated_job
+
+
+_RESCORE_COLUMNS = "id, cv_text, corrections, nationality, city, row_version"
+
+
+def _rescore_applicants(job: dict, applicants) -> int:
+    """Score applicants outside the lock, then publish under it; returns rows published."""
     rescored = []
     taxonomy = _taxonomy_snapshot() if applicants else []
+    rubric_version = job["rubric_version"]
     for applicant in applicants:
         result = _score_stored(
-            applicant["cv_text"], _load_json(applicant["corrections"], {}), updated_job,
+            applicant["cv_text"], _load_json(applicant["corrections"], {}), job,
             {"nationality": applicant["nationality"], "city": applicant["city"]}, taxonomy,
         )
         rescored.append((*_score_values(result), rubric_version, _now(), applicant["id"], applicant["row_version"],
-                         job_id, rubric_version))
+                         job["id"], rubric_version))
     published = 0
     if rescored:
         with db() as conn:
@@ -406,8 +415,22 @@ def update_job(job_id: int, payload: JobIn, user: CurrentUser = Depends(_hr_staf
                     "AND (SELECT rubric_version FROM job_openings WHERE id=?) = ?",
                     item,
                 ).rowcount
-    updated_job["rescored_applicants"] = published
-    return updated_job
+    return published
+
+
+@router.post("/jobs/{job_id}/rescore")
+def rescore_job(job_id: int, _: CurrentUser = Depends(_hr_staff)):
+    """Re-score a job's applicants with the current taxonomy, criteria unchanged."""
+    with db() as conn:
+        lock(conn)
+        row = conn.execute("SELECT * FROM job_openings WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Job not found")
+        applicants = conn.execute(
+            f"SELECT {_RESCORE_COLUMNS} FROM applicants WHERE job_id = ? AND cv_purged_at IS NULL",
+            (job_id,),
+        ).fetchall()
+    return {"rescored_applicants": _rescore_applicants(_job_dict(row), applicants)}
 
 
 @router.post("/jobs/{job_id}/close")

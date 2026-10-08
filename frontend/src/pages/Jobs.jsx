@@ -177,6 +177,19 @@ export default function Jobs({ lang, user, onOpenApplicants }) {
     }
   }
 
+  async function rescore(job) {
+    setBusyId(job.id);
+    try {
+      const res = await api.rescoreJob(job.id);
+      toast("ok", t("rescoredN").replace("{n}", res.rescored_applicants));
+      await load();
+    } catch (e) {
+      toast("err", e?.message || t("errGeneric"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function toggleStatus(job) {
     setBusyId(job.id);
     try {
@@ -239,6 +252,9 @@ export default function Jobs({ lang, user, onOpenApplicants }) {
                         {isHr && <button onClick={() => openEdit(j.id)} style={chipBtn(S.info)}>{t("editDoc")}</button>}
                         {isHr && (
                           <button onClick={() => toggleStatus(j)} disabled={busyId === j.id} style={chipBtn(open ? S.warn : S.ok)}>{busyId === j.id ? "…" : t(open ? "closeJob" : "reopenJob")}</button>
+                        )}
+                        {isHr && st?.applicant_count > 0 && (
+                          <button onClick={() => rescore(j)} disabled={busyId === j.id} title={t("rescoreHint")} style={chipBtn(S.g600)}>{t("rescore")}</button>
                         )}
                       </div>
                     </td>

@@ -292,6 +292,30 @@ def test_removed_alias_on_a_seeded_skill_stops_matching(admin):
     finally:
         admin.post("/api/recruitment/taxonomy", json=seeded, headers=csrf(admin))
 
+def test_rescore_applies_taxonomy_edits_to_existing_applicants(admin, new_employee):
+    custom = {
+        "id": f"synthetic_rescore_{next(_seq)}",
+        "canonical": "Synthetic Rescore Skill",
+        "category": "test",
+        "aliases": ["unlisted phrase"],
+        "is_active": True,
+    }
+    assert admin.post("/api/recruitment/taxonomy", json=custom, headers=csrf(admin)).status_code == 200
+    job, _ = _create_job(admin, required_skills=[custom["id"]], preferred_skills=[])
+    applicant = _upload(admin, job["id"], skills="fare desk handling").json()
+    before = applicant["score"]
+
+    custom["aliases"] = ["fare desk handling"]
+    admin.post("/api/recruitment/taxonomy", json=custom, headers=csrf(admin))
+    head, _ = new_employee(role="dept_head")
+    assert head.post(f"/api/recruitment/jobs/{job['id']}/rescore", headers=csrf(head)).status_code == 403
+    response = admin.post(f"/api/recruitment/jobs/{job['id']}/rescore", headers=csrf(admin))
+    assert response.status_code == 200 and response.json()["rescored_applicants"] == 1
+    after = admin.get(f"/api/recruitment/applicants/{applicant['id']}").json()
+    assert after["score"] > before
+    assert after["score_stale"] is False
+    assert admin.post("/api/recruitment/jobs/999999/rescore", headers=csrf(admin)).status_code == 404
+
 def test_parse_preview_does_not_persist_and_stats(admin):
     job, _ = _create_job(admin)
     before = admin.get("/api/recruitment/stats").json()["total_applicants"]

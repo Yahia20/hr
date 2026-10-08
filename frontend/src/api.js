@@ -105,6 +105,7 @@ export const api = {
   getJob: (id) => req(`/recruitment/jobs/${id}`),
   createJob: (data) => req("/recruitment/jobs", { method: "POST", body: JSON.stringify(data) }),
   updateJob: (id, data) => req(`/recruitment/jobs/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  rescoreJob: (id) => req(`/recruitment/jobs/${id}/rescore`, { method: "POST" }),
   listApplicants: (jobId, filters = {}) => {
     const qs = new URLSearchParams(
       Object.entries(filters).filter(([, v]) => v !== undefined && v !== null && v !== "")
