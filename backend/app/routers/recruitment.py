@@ -445,6 +445,22 @@ def close_job(job_id: int, _: CurrentUser = Depends(_hr_staff)):
     return {"id": job_id, "status": "closed", "closed_at": now}
 
 
+@router.delete("/jobs/{job_id}", status_code=204)
+def delete_job(job_id: int, _: CurrentUser = Depends(_hr_staff)):
+    """Delete a job that never received applicants (e.g. created by mistake).
+
+    applicants.job_id cascades, so a job with applicants is refused: those go
+    through the applicant delete/retention paths, which keep the audit trail.
+    """
+    with db() as conn:
+        lock(conn)  # same lock as upload, so no applicant can arrive between check and delete
+        if conn.execute("SELECT 1 FROM job_openings WHERE id = ?", (job_id,)).fetchone() is None:
+            raise HTTPException(404, "Job not found")
+        if conn.execute("SELECT 1 FROM applicants WHERE job_id = ? LIMIT 1", (job_id,)).fetchone():
+            raise HTTPException(409, "job_has_applicants")
+        conn.execute("DELETE FROM job_openings WHERE id = ?", (job_id,))
+
+
 @router.get("/jobs/{job_id}/applicants")
 def list_applicants(
     job_id: int,

@@ -5,7 +5,7 @@ import { S } from "../tokens";
 import { L } from "../i18n";
 import { IC } from "../icons";
 import { Card, Empty, SkeletonRows, BtnPri, BtnSec, Th, FG, inp, chipBtn } from "../components";
-import { Modal } from "../modal";
+import { Modal, ConfirmModal } from "../modal";
 import { useToast } from "../toast";
 
 // Full-width fields must include their padding, or they overflow grid cells.
@@ -109,6 +109,7 @@ export default function Jobs({ lang, user, onOpenApplicants }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [deleting, setDeleting] = useState(null); // job pending delete confirmation
 
   const nameOf = useMemo(() => {
     const m = Object.fromEntries(taxonomy.map((s) => [s.id, s.canonical]));
@@ -174,6 +175,21 @@ export default function Jobs({ lang, user, onOpenApplicants }) {
       setErr(e?.message || t("errGeneric"));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function removeJob() {
+    const job = deleting;
+    setBusyId(job.id);
+    try {
+      await api.deleteJob(job.id);
+      toast("ok", t("jobDeleted"));
+      setDeleting(null);
+      await load();
+    } catch (e) {
+      toast("err", e?.message === "job_has_applicants" ? t("errJobHasApplicants") : e?.message || t("errGeneric"));
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -253,6 +269,9 @@ export default function Jobs({ lang, user, onOpenApplicants }) {
                         {isHr && (
                           <button onClick={() => toggleStatus(j)} disabled={busyId === j.id} style={chipBtn(open ? S.warn : S.ok)}>{busyId === j.id ? "…" : t(open ? "closeJob" : "reopenJob")}</button>
                         )}
+                        {isHr && st && st.applicant_count === 0 && (
+                          <button onClick={() => setDeleting(j)} disabled={busyId === j.id} style={chipBtn(S.err)}>{t("del")}</button>
+                        )}
                         {isHr && st?.applicant_count > 0 && (
                           <button onClick={() => rescore(j)} disabled={busyId === j.id} title={t("rescoreHint")} style={chipBtn(S.g600)}>{t("rescore")}</button>
                         )}
@@ -266,6 +285,12 @@ export default function Jobs({ lang, user, onOpenApplicants }) {
         </div>
       </Card>
 
+      <ConfirmModal
+        open={deleting !== null} onClose={() => setDeleting(null)} onConfirm={removeJob} busy={busyId !== null}
+        title={t("confirmDel")}
+        body={`${t("del")}: ${deleting?.title || ""} — ${t("irreversible")}`}
+        confirmLabel={t("del")} cancelLabel={t("cancel")}
+      />
       <Modal open={editing !== null} onClose={() => setEditing(null)} title={t(editing === "new" ? "newJob" : "editJob")} width={720}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 18 }}>
           {editing === "new" && templates.length > 0 && (

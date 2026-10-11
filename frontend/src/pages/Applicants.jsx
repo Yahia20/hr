@@ -632,7 +632,7 @@ function EvalTab({ a, t }) {
             <ul style={{ margin: "10px 0 0", paddingInlineStart: 18, display: "flex", flexDirection: "column", gap: 4 }}>
               {c.evidence.slice(0, 8).map((e, i) => (
                 <li key={i} style={{ fontSize: 12.5, color: S.g600 }}>
-                  <strong style={{ color: S.g700 }}>{e.term}</strong> — <span style={{ color: S.g500 }}>{e.line}</span>
+                  <strong style={{ color: S.g700 }}><bdi>{e.term}</bdi></strong> — <span style={{ color: S.g500 }}><bdi>{e.line}</bdi></span>
                 </li>
               ))}
             </ul>

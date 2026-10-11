@@ -316,6 +316,20 @@ def test_rescore_applies_taxonomy_edits_to_existing_applicants(admin, new_employ
     assert after["score_stale"] is False
     assert admin.post("/api/recruitment/jobs/999999/rescore", headers=csrf(admin)).status_code == 404
 
+def test_delete_job_only_without_applicants(admin, new_employee):
+    empty, _ = _create_job(admin)
+    head, _ = new_employee(role="dept_head")
+    assert head.delete(f"/api/recruitment/jobs/{empty['id']}", headers=csrf(head)).status_code == 403
+    assert admin.delete(f"/api/recruitment/jobs/{empty['id']}", headers=csrf(admin)).status_code == 204
+    assert admin.get(f"/api/recruitment/jobs/{empty['id']}").status_code == 404
+    assert admin.delete(f"/api/recruitment/jobs/{empty['id']}", headers=csrf(admin)).status_code == 404
+
+    used, _ = _create_job(admin)
+    applicant = _upload(admin, used["id"]).json()
+    refused = admin.delete(f"/api/recruitment/jobs/{used['id']}", headers=csrf(admin))
+    assert refused.status_code == 409 and refused.json()["detail"] == "job_has_applicants"
+    assert admin.get(f"/api/recruitment/applicants/{applicant['id']}").status_code == 200  # no cascade
+
 def test_parse_preview_does_not_persist_and_stats(admin):
     job, _ = _create_job(admin)
     before = admin.get("/api/recruitment/stats").json()["total_applicants"]
