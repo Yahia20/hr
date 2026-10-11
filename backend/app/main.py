@@ -174,6 +174,13 @@ async def security_headers(request: Request, call_next):
     if request.url.path.startswith("/api"):
         # API responses carry HR data; keep them out of shared caches.
         response.headers["Cache-Control"] = "no-store"
+    elif request.url.path.startswith("/assets/"):
+        # Vite fingerprints these file names, so a new build never reuses one.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        # The SPA shell names the current bundle; revalidate it so a deploy
+        # reaches users on their next load instead of after a heuristic cache window.
+        response.headers["Cache-Control"] = "no-cache"
     if request.url.scheme == "https":
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
